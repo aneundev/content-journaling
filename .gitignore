@@ -1,0 +1,5 @@
+# 분석 기록 · 설정은 PC에만 둔다 (Claude API 키, 긱어스 로그인 정보가 들어 있다)
+data/
+
+# 처음 실행할 때 PC마다 자동으로 받는 프로그램 (Node.js, yt-dlp, ffmpeg)
+bin/

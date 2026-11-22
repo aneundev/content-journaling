@@ -1,0 +1,796 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>컨텐츠 저널링 도구</title>
+<link rel="icon" href="data:,">
+<style>
+:root{
+  color-scheme:light dark;
+  --bg:#f6f5f2; --card:#fff; --ink:#1f1e1c; --mute:#77736c; --line:#e4e1da;
+  --accent:#d9480f; --accent-ink:#fff; --ok:#2b8a3e; --err:#c92a2a;
+  --radius:12px;
+}
+@media (prefers-color-scheme: dark){
+  :root{ --bg:#191817; --card:#232220; --ink:#ece9e3; --mute:#9a958c; --line:#383633;
+    --accent:#ff922b; --accent-ink:#1b1a18; --ok:#69db7c; --err:#ff8787; }
+}
+*{box-sizing:border-box}
+[hidden]{display:none !important}
+body{margin:0; background:var(--bg); color:var(--ink);
+  font:14px/1.55 "Pretendard","Apple SD Gothic Neo","Malgun Gothic",system-ui,sans-serif}
+button,input,textarea,select{font:inherit; color:inherit}
+header{position:sticky; top:0; z-index:5; background:var(--bg); border-bottom:1px solid var(--line)}
+/* 휴대폰 너비 한 줄 배치 */
+.bar{display:flex; align-items:center; gap:8px; padding:8px 12px; max-width:480px; margin:0 auto; min-width:0}
+.bar h1{font-size:16px; margin:0 4px 0 0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; min-width:0}
+.spacer{flex:1 1 0; min-width:0}
+.chip{border:1px solid var(--line); background:var(--card); border-radius:999px; padding:4px 12px; cursor:pointer; white-space:nowrap;
+  text-decoration:none; color:inherit; flex:none}
+.chip:hover{border-color:var(--accent)}
+main{display:grid; grid-template-columns:minmax(0,1fr); gap:12px; padding:12px; max-width:480px; margin:0 auto}
+.card{background:var(--card); border:1px solid var(--line); border-radius:var(--radius); padding:10px 12px; min-width:0}
+.card h2{font-size:14.5px; margin:0 0 8px; display:flex; align-items:center; gap:8px; white-space:nowrap}
+.card h2 small{font-weight:400; color:var(--mute); font-size:12px; overflow:hidden; text-overflow:ellipsis}
+.body{display:flex; flex-direction:column; gap:8px; min-width:0}
+.hint{color:var(--mute); font-size:12px; margin:0; overflow-wrap:anywhere}
+.hint a{color:var(--accent)}
+label{display:block; font-size:12px; font-weight:600; margin:0 0 2px}
+input[type=url],input[type=text],input[type=password],textarea,select{
+  width:100%; background:var(--bg); border:1px solid var(--line); border-radius:8px; padding:6px 9px; outline:none}
+input:focus,textarea:focus,select:focus{border-color:var(--accent)}
+textarea{resize:vertical; display:block; min-height:320px; font-size:13px}
+.row{display:flex; gap:6px; align-items:center}
+.row > input{flex:1; min-width:0}
+.btn{border:0; border-radius:8px; padding:6px 12px; cursor:pointer; background:var(--accent); color:var(--accent-ink); font-weight:600; white-space:nowrap}
+.btn.ghost{background:transparent; color:var(--ink); border:1px solid var(--line)}
+.btn.busy{background:var(--mute)}
+.status{font-size:12px; color:var(--mute); font-weight:400; overflow:hidden; text-overflow:ellipsis; white-space:normal; line-height:1.4}
+.status.err{color:var(--err)}
+#postStatus.err{white-space:pre-wrap; overflow:auto; max-height:260px; user-select:text; overflow-wrap:anywhere}
+.del{border:0; background:transparent; color:var(--mute); cursor:pointer; font-size:16px; line-height:1; padding:2px 5px; border-radius:6px; flex:none}
+.del:hover{color:var(--err); background:color-mix(in srgb,var(--err) 12%,transparent)}
+
+/* 영상 정보 */
+/* 썸네일을 누르면 그 자리에서 유튜브 플레이어로 바뀐다 */
+.player{position:relative; aspect-ratio:16/9; border-radius:8px; border:1px solid var(--line); overflow:hidden; background:#000; cursor:pointer}
+.player.playing{cursor:auto}
+#thumb,.player iframe{display:block; width:100%; height:100%; object-fit:cover; border:0}
+#play{position:absolute; inset:0; margin:auto; width:64px; height:44px; border:0; border-radius:12px; background:rgba(0,0,0,.7); color:#fff; font-size:18px; cursor:pointer}
+.player:hover #play,#play:focus-visible{background:var(--accent); color:var(--accent-ink)}
+.vtitle{font-weight:700; font-size:15px; line-height:1.4}
+.vtitle a{color:inherit; text-decoration:none}
+.vtitle a:hover{color:var(--accent)}
+.frames{display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:6px}
+.frames figure{margin:0; position:relative}
+.frames img{display:block; width:100%; aspect-ratio:16/9; object-fit:cover; border-radius:6px; border:1px solid var(--line)}
+.frames figcaption{position:absolute; left:4px; bottom:4px; padding:0 5px; border-radius:4px; background:rgba(0,0,0,.65); color:#fff; font-size:11px}
+
+/* 분석 결과 */
+.md{font-size:14px; line-height:1.6; overflow-wrap:anywhere}
+.md > :first-child{margin-top:0}
+.md h3{font-size:16px; margin:16px 0 6px}
+.md h4{font-size:14.5px; margin:14px 0 4px; color:var(--accent)}
+.md p{margin:6px 0}
+.md ul,.md ol{margin:4px 0; padding-left:22px}
+.md li{margin:2px 0}
+.md hr{border:0; border-top:1px solid var(--line); margin:12px 0}
+.md blockquote{margin:6px 0; padding-left:10px; border-left:3px solid var(--line); color:var(--mute)}
+.md a{color:var(--accent); word-break:break-all}
+.md table{border-collapse:collapse; width:100%; margin:8px 0}
+.md th,.md td{border:1px solid var(--line); padding:5px 8px; text-align:left; vertical-align:top}
+.md .empty{color:var(--mute)}
+
+/* 최근 분석 */
+.hrow{display:flex; gap:8px; align-items:center; padding:6px; border:1px solid var(--line); border-radius:8px; cursor:pointer; min-width:0}
+.hrow:hover,.hrow.on{border-color:var(--accent)}
+.hrow img{width:72px; aspect-ratio:16/9; object-fit:cover; border-radius:5px; flex:none; background:var(--bg)}
+.hrow .t{flex:1; min-width:0}
+.hrow .t b{display:block; font-size:13px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
+.hrow .t span{display:block; font-size:12px; color:var(--mute); white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
+
+dialog{border:1px solid var(--line); border-radius:16px; background:var(--card); color:var(--ink); padding:20px; width:min(460px,92vw)}
+dialog::backdrop{background:rgba(0,0,0,.45)}
+dialog h2{margin:0 0 4px; font-size:18px}
+dialog h3{margin:18px 0 0; padding-top:12px; border-top:1px solid var(--line); font-size:14.5px}
+dialog .row > div{flex:1; min-width:0}
+#postBox{display:flex; flex-direction:column; gap:8px}
+dialog label{margin-top:10px}
+dialog .hint{margin:4px 0}
+.dfoot{display:flex; justify-content:flex-end; gap:8px; margin-top:16px}
+#copyBuf{position:fixed; left:-9999px; top:0; width:600px}
+#toast{position:fixed; left:50%; bottom:24px; transform:translateX(-50%); background:var(--ink); color:var(--bg);
+  padding:9px 16px; border-radius:999px; opacity:0; pointer-events:none; transition:opacity .2s; z-index:20; max-width:92vw; text-align:center}
+#toast.on{opacity:1}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="bar">
+    <h1>🎬 컨텐츠 저널링 도구</h1>
+    <span class="spacer"></span>
+    <a class="chip" id="helpLink" href="https://github.com/aneundev/content-journaling#readme" target="_blank" rel="noopener" title="설치 · 사용 방법 설명서를 엽니다">❓ 사용법</a>
+    <button class="chip" id="openSettings" title="API 키 · 모델">⚙ 설정</button>
+  </div>
+</header>
+
+<main>
+  <section class="card">
+    <h2>유튜브 영상 분석</h2>
+    <div class="body">
+      <div class="row">
+        <input type="url" id="url" placeholder="유튜브 링크 붙여넣고 Enter" autocomplete="off">
+        <button class="btn" id="run">✨ 분석</button>
+      </div>
+      <div class="status" id="status" role="status"></div>
+      <p class="hint" id="hint"></p>
+    </div>
+  </section>
+
+  <section class="card" id="videoCard" hidden>
+    <h2>영상 정보</h2>
+    <div class="body">
+      <div class="player" id="player">
+        <img id="thumb" alt="영상 썸네일">
+        <button type="button" id="play" title="여기서 영상 재생" aria-label="영상 재생">▶</button>
+      </div>
+      <div class="vtitle"><a id="vTitle" target="_blank" rel="noopener"></a></div>
+      <p class="hint" id="vMeta"></p>
+      <p class="hint" id="vUsed"></p>
+      <div class="frames" id="frames"></div>
+    </div>
+  </section>
+
+  <section class="card" id="resultCard" hidden>
+    <h2>분석 결과</h2>
+    <div class="body">
+      <div class="row">
+        <button class="btn" id="copyNotion" title="노션에 붙여넣을 수 있게 복사">📋 노션 복사</button>
+        <button class="btn ghost" id="copyMd">마크다운 복사</button>
+        <span class="spacer"></span>
+        <button class="btn ghost" id="toggleEdit">✏️ 수정</button>
+      </div>
+      <!-- 긱어스에 올리기: Aside CLI가 설치된 PC에서만 보인다 -->
+      <div id="postBox" hidden>
+        <div class="row">
+          <button class="btn" id="postGeekus" title="긱어스 AG 마스터마인드의 컨텐츠저널링 카테고리에 게시합니다. 글 맨 위에 유튜브 영상을 임베드합니다">🚀 긱어스에 올리기</button>
+          <div class="status" id="postStatus" role="status"></div>
+        </div>
+        <p class="hint" id="postInfo"></p>
+      </div>
+      <div class="md" id="rendered"></div>
+      <textarea id="raw" hidden aria-label="분석 결과 마크다운"></textarea>
+    </div>
+  </section>
+
+  <section class="card" id="historyCard" hidden>
+    <h2>최근 분석 <small>눌러서 다시 보기</small></h2>
+    <div class="body" id="history"></div>
+  </section>
+</main>
+
+<dialog id="settingsDlg">
+  <form method="dialog" id="settingsForm">
+    <h2>설정</h2>
+    <label for="sKey">Claude API 키</label>
+    <input type="text" id="sKey" placeholder="sk-ant-..." autocomplete="off" spellcheck="false">
+    <p class="hint">영상을 분석하려면 꼭 필요합니다. 키가 없으면 <a href="https://platform.claude.com/settings/keys" target="_blank" rel="noopener">Claude Console</a>에서 만들어 붙여 넣으세요 (만드는 방법은 ❓ 사용법 참고). 키는 이 PC의 data/settings.json 파일에만 저장되고 api.anthropic.com 으로만 전송됩니다.</p>
+    <label for="sModel">모델</label>
+    <select id="sModel">
+      <option value="claude-opus-5-5">Claude Opus 5.5 — 품질 우선 (기본)</option>
+      <option value="claude-sonnet-5-5">Claude Sonnet 5.5 — 균형</option>
+      <option value="claude-haiku-5-5">Claude Haiku 5.5 — 가장 빠르고 저렴</option>
+    </select>
+    <!-- 긱어스에 올리기 설정: Aside CLI가 설치된 PC에서만 보인다 -->
+    <div id="geekusBox" hidden>
+      <h3>긱어스에 올리기</h3>
+      <div class="row">
+        <div><label for="pCohort">기수</label><input type="text" id="pCohort" inputmode="numeric" placeholder="예: 51" autocomplete="off"></div>
+        <div><label for="pName">이름</label><input type="text" id="pName" placeholder="예: 홍길동" autocomplete="off"></div>
+      </div>
+      <p class="hint">글 제목에 씁니다. 예: 51기 홍길동 컨텐츠 저널링 - 영상 제목</p>
+      <label for="gEmail">긱어스 이메일</label>
+      <input type="text" id="gEmail" placeholder="긱어스 로그인 이메일" autocomplete="off" spellcheck="false">
+      <label for="gPw">긱어스 비밀번호</label>
+      <input type="password" id="gPw" autocomplete="off">
+      <p class="hint">긱어스에 올릴 때 Aside 브라우저의 로그인이 풀려 있으면 이 계정으로 로그인합니다. 이 PC의 data/settings.json 파일에 저장됩니다.</p>
+    </div>
+    <div class="dfoot">
+      <button class="btn ghost" type="button" id="sCancel">닫기</button>
+      <button class="btn" type="submit">저장</button>
+    </div>
+  </form>
+</dialog>
+<div id="copyBuf" aria-hidden="true"></div>
+<div id="toast"></div>
+
+<script>
+/* ===== 마크다운 → HTML ===== */
+function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')}
+function inline(s){
+  s=esc(s);
+  s=s.replace(/`([^`]+)`/g,'<code>$1</code>');
+  s=s.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g,'<a href="$2">$1</a>');
+  s=s.replace(/(^|[\s(:])(https?:\/\/[^\s<)]+)/g,'$1<a href="$2">$2</a>');
+  s=s.replace(/\*\*(.+?)\*\*/g,'<strong>$1</strong>');
+  return s;
+}
+const LIST_RE=/^(\s*)([-*•]|\d+[.)])\s+(.*)$/;
+function mdToHtml(md){
+  const L=md.replace(/\r/g,'').split('\n'); let out='', i=0;
+  while(i<L.length){
+    const line=L[i];
+    if(!line.trim()){i++;continue}
+    let m;
+    if((m=line.match(/^(#{1,4})\s+(.*)$/))){out+=`<h${m[1].length}>${inline(m[2])}</h${m[1].length}>`;i++;continue}
+    if(/^\s*(-{3,}|\*{3,})\s*$/.test(line)){out+='<hr>';i++;continue}
+    if(/^\s*\|/.test(line)){
+      const rows=[];
+      while(i<L.length&&/^\s*\|/.test(L[i])){rows.push(L[i].trim());i++}
+      const cells=r=>r.replace(/^\||\|$/g,'').split(/(?<!\\)\|/).map(c=>inline(c.trim().replace(/\\\|/g,'|')));
+      const hasHead=rows.length>1&&/^\|[\s:|-]+\|?$/.test(rows[1]);
+      out+='<table>';
+      rows.forEach((r,n)=>{
+        if(hasHead&&n===1)return;
+        const tag=hasHead&&n===0?'th':'td';
+        out+='<tr>'+cells(r).map(c=>`<${tag}>${c}</${tag}>`).join('')+'</tr>';
+      });
+      out+='</table>';continue;
+    }
+    if(LIST_RE.test(line)){
+      const stack=[]; // {indent,tag}
+      while(i<L.length){
+        const lm=L[i].match(LIST_RE);
+        if(!lm){
+          // 들여쓴 이어지는 줄은 직전 항목에 붙인다
+          if(L[i].trim()&&/^\s+/.test(L[i])&&stack.length){out+='<br>'+inline(L[i].trim());i++;continue}
+          break;
+        }
+        const indent=lm[1].replace(/\t/g,'  ').length, tag=/\d/.test(lm[2])?'ol':'ul';
+        while(stack.length&&indent<stack[stack.length-1].indent){out+=`</li></${stack.pop().tag}>`}
+        const top=stack[stack.length-1];
+        if(!top||indent>top.indent){out+=`<${tag}>`;stack.push({indent,tag})}
+        else if(top.tag!==tag){out+=`</li></${stack.pop().tag}><${tag}>`;stack.push({indent,tag})}
+        else out+='</li>';
+        out+='<li>'+inline(lm[3]);
+        i++;
+      }
+      while(stack.length)out+=`</li></${stack.pop().tag}>`;
+      continue;
+    }
+    if((m=line.match(/^>\s?(.*)$/))){out+=`<blockquote>${inline(m[1])}</blockquote>`;i++;continue}
+    const para=[];
+    while(i<L.length&&L[i].trim()&&!/^(#{1,4}\s|\s*\||>\s?)/.test(L[i])&&!LIST_RE.test(L[i])&&!/^\s*(-{3,}|\*{3,})\s*$/.test(L[i])){para.push(inline(L[i].trim()));i++}
+    out+=`<p>${para.join('<br>')}</p>`;
+  }
+  return out;
+}
+/* ===== 유튜브 주소에서 영상 id 뽑기: null = 유튜브 주소가 아님, '' = 유튜브지만 id를 알 수 없는 형태 ===== */
+function videoId(raw){
+  let u;
+  try{u=new URL(String(raw).trim())}catch{return null}
+  if(u.protocol!=='https:'&&u.protocol!=='http:')return null;
+  const host=u.hostname.toLowerCase().replace(/^(www|m|music)\./,'');
+  if(host==='youtu.be')return u.pathname.split('/')[1]||'';
+  if(host!=='youtube.com')return null;
+  if(u.pathname==='/watch')return u.searchParams.get('v')||'';
+  const m=u.pathname.match(/^\/(shorts|live|embed)\/([^/?#]+)/);
+  return m?m[2]:'';
+}
+
+/* ===== 분석 규칙 ===== */
+const SYSTEM=`당신은 한국어 데일리 저널링 과제 작성을 돕습니다.
+출력은 노션에 그대로 붙여넣을 마크다운 본문뿐입니다. 인사말, 서두, 맺음말, 후속 제안("~해 드릴까요?")은 쓰지 않습니다.
+제목은 ###, 소제목은 ####만 사용하고 #, ##는 쓰지 않습니다. 도구(검색·링크 열기)가 필요하면 모두 마친 뒤 본문을 한 번에 작성합니다.
+확인하지 못한 사실은 지어내지 말고 "(추정)" 또는 "확인하지 못했습니다"라고 씁니다.`;
+
+const CONTENT_FORMAT=`콘텐츠 마케팅 관점에서 아래 형식 그대로 분석해 주세요. 각 항목은 "- **항목명**: 내용" 불릿으로 씁니다. 항목명 뒤 괄호 안의 안내문은 무엇을 쓸지 알려 주는 것이니 출력에 옮기지 않습니다.
+
+작성 기준
+- 영상에 실제로 나온 고유명사(장소 · 인물 · 브랜드)와 숫자를 그대로 인용해 구체적으로 씁니다. "고급스러운 장소"처럼 뭉뚱그리지 않습니다.
+- 외화나 해외 단위는 원화 · 한국 단위로 대략 환산해 괄호로 함께 적습니다. 예: 20억 달러(약 2조 6천억 원)
+- 핵심 영어 표현은 한국어 뒤에 괄호로 원어를 함께 적습니다. 예: 잡담(Small talk), 권위(Authority)
+- 왜 통했는지는 시점(POV) · 대비 효과 · 권위 · 호기심 · 구체적 숫자처럼 작동 원리에 이름을 붙여 설명합니다.
+- 썸네일과 도입부 화면은 첨부 이미지에서 실제로 보이는 것(구도 · 시점 · 배경 장소 · 분위기)을 근거로 씁니다.
+
+### [1] 유튜브 영상 분석
+**분석 대상 영상**: 제목 (채널명)
+
+---
+
+#### (1) 썸네일 이미지 분석
+- **인물과 문구의 위치**: (구도와 시점 — 1인칭 POV인지 등 — 을 먼저 짚고, 문구가 인물 · 배경과 어떤 위치 관계인지, 시선이 어떤 순서로 흐르는지)
+- **인물의 위치 / 표정**: (어떤 배경 · 장소에서 어떤 표정 · 자세로 어떤 분위기를 연출하는지)
+- **썸네일 문구 카피 / 폰트**: (문구 원문을 그대로 인용하고, 폰트의 느낌과 그 문구가 전달하는 것. 문구가 없으면 없다고 쓰고 그 효과)
+
+---
+
+#### (2) 제목 분석
+- **원문 제목**:
+- **왜 이 카피가 많은 사람들에게 먹혔을까?**: (번호 목록 2~4개, 각 항목은 "**작동 원리 이름**: 제목 속 실제 단어를 짚어 설명")
+- **한국화가 가능한가?**: (가능 여부를 먼저 답하고, 롱폼 · 숏폼 · 릴스 등 어떤 형식과 플랫폼에 맞는지와 이유)
+- **한국어로 제목을 바꾸면?**: (한국 유튜브에서 실제로 쓰는 구어체로, 직관형 / 호기심형 각 1개)
+
+---
+
+#### (3) 도입부 분석
+- **원고 앞부분 30초 (한국어 번역)**: (인용문으로. 숫자와 핵심 표현을 빠뜨리지 않고, 작성 기준대로 환산 · 원어 병기)
+- **왜 이 도입부를 매력적이라고 느꼈는가?**: (번호 목록 2~3개. 첫 1~3초 화면이 시선을 끄는 방식과, 첫 문장이 시청자를 붙잡는 방식을 각각 포함)
+
+---
+
+#### (4) 썸네일 이미지 디벨롭
+- **이미지 vs 문구 비율**: ("이미지 70% : 문구 30%" 형태의 비율과 그렇게 본 이유)
+- **이 주제를 어떤 사람들이 왜 클릭했을까?**: (연령대 · 관심사로 타깃을 구체적으로 적고, 그들이 확인하고 싶었던 것을 한 문장으로)
+- **썸네일 사진 디벨롭 아이디어**: (배경 · 인물 · 텍스트 배지를 어떻게 바꿀지 구체적으로. 넣을 문구는 영상 속 숫자나 핵심어로 직접 써 주고, 클릭률(CTR)에 어떤 도움이 되는지)
+
+---
+
+#### (5) 썸네일 제목 디벨롭
+- **1단계 (한국어 직역 → 일상어 변환)**:
+  - 직역:
+  - 일상어:
+- **2단계 (일상어 → 강한 단어 변환)**:
+  - 카피 안 A: (숫자 · 결과를 앞세운 안)
+  - 카피 안 B: (상황 · 대비를 앞세운 안)`;
+
+const pad=n=>String(n).padStart(2,'0');
+const won=n=>Number(n).toLocaleString('ko-KR');
+const hms=s=>{s=Math.round(s);const h=Math.floor(s/3600),m=Math.floor(s%3600/60);return (h?h+':'+pad(m):m)+':'+pad(s%60)};
+
+// 서버가 받아온 영상 데이터(v)로 Claude에게 보낼 내용과, 무엇을 근거로 썼는지(note)를 만든다
+function buildRequest(v){
+  const img=x=>({type:'image',source:{type:'base64',media_type:x.media_type,data:x.data}});
+  const blocks=[];
+  if(v.thumbnail)blocks.push({type:'text',text:'[첨부 이미지] 이 영상의 실제 썸네일:'},img(v.thumbnail));
+  if(v.frames.length)blocks.push({type:'text',text:`[첨부 이미지 ${v.frames.length}장] 영상 도입부 화면 캡처 (${v.frames.map(f=>f.t+'초').join(', ')}):`},...v.frames.map(img));
+  const cap=v.caption
+    ?`[도입부 자막 0:00~1:00 · 언어 ${v.caption.lang}${v.caption.auto?' · 자동 생성이라 오탈자와 문장부호 누락이 있을 수 있음':''}]
+"""
+${v.intro}
+"""
+
+[전체 자막${v.transcriptTruncated?' — 너무 길어 앞부분만 포함':''}]
+"""
+${v.transcript}
+"""
+
+(3)의 "원고 앞부분 30초"는 위 도입부 자막의 0:00~0:30 구간을 자연스러운 한국어로 옮겨 인용문으로 씁니다.`
+    :'[자막] 이 영상은 자막을 받을 수 없었습니다. (3)의 원고 번역은 "자막을 받을 수 없어 확인하지 못했습니다"라고 쓰고 지어내지 마세요.';
+  blocks.push({type:'text',text:`아래는 유튜브에서 직접 받아온 이 영상의 실제 데이터입니다. 첨부 이미지와 이 데이터만 근거로 분석하고, 데이터에 없는 내용은 지어내지 마세요.${v.thumbnail?'':' 썸네일 이미지를 받지 못했으니 (1)은 "썸네일을 받지 못했습니다"라고 쓰세요.'}
+
+- 링크: ${v.url}
+- 제목: ${v.title}
+- 채널: ${v.channel}${v.viewCount!=null?`\n- 조회수: ${won(v.viewCount)}회`:''}${v.uploadDate?`\n- 업로드: ${v.uploadDate}`:''}${v.duration?`\n- 길이: ${hms(v.duration)}`:''}
+- 설명란(앞부분):
+"""
+${v.description}
+"""
+
+${cap}
+
+${CONTENT_FORMAT}`});
+  const note=[v.caption?`자막(${v.caption.lang}${v.caption.auto?' 자동생성':''})`:'자막 없음',
+    v.thumbnail?'썸네일':'썸네일 없음',v.frames.length?`도입부 화면 ${v.frames.length}장`:'',
+    v.transcriptTruncated?'자막이 길어 앞부분만':''].filter(Boolean).join(' · ')+' 사용';
+  return {content:blocks,note};
+}
+// 복사 · 내보내기용 본문: 링크를 맨 위에 붙인다
+const exportMd=it=>`**콘텐츠 링크**: ${it.url}\n\n---\n\n${(it.out||'').trim()}\n`;
+
+/* ===== 긱어스에 올리기 ===== */
+const GEEKUS_CATEGORY='컨텐츠저널링';
+// 글 제목: "51기 홍길동 컨텐츠 저널링 - 영상 제목". 기수나 이름이 없으면 만들지 않는다.
+function postTitle(profile,it){
+  const cohort=String(profile?.cohort||'').trim().replace(/기$/,''), name=String(profile?.name||'').trim();
+  if(!cohort||!name)return '';
+  return `${cohort}기 ${name} 컨텐츠 저널링 - ${String(it.title||'').replace(/\s+/g,' ').trim()}`.slice(0,200);
+}
+// 긱어스 편집기는 제목을 3단계까지만 쓰므로 한 단계씩 올린다 (### → 중제목, #### → 소제목)
+const geekusHtml=it=>mdToHtml(exportMd(it)).replace(/<(\/?)h3>/g,'<$1h2>').replace(/<(\/?)h4>/g,'<$1h3>');
+/* ===== 순수 함수 끝 ===== */
+
+if(typeof document!=='undefined'){(()=>{
+const $=(s,r=document)=>r.querySelector(s);
+const MAX_ITEMS=50;
+// 분석 기록과 설정은 모두 PC의 data 폴더 파일에서 읽어 온다. 브라우저에는 저장하지 않는다.
+let settings={apiKey:'',model:'claude-opus-5-5'}; // data/settings.json: {apiKey, model, profile:{cohort,name}, geekus:{email,password}}
+const getSettings=()=>settings;
+const getProfile=()=>settings.profile||{}; // 기수 · 이름 (긱어스 글 제목에 쓴다)
+let server=null;
+let items=[];   // 분석 기록 (최근 것부터): {id,url,title,channel,viewCount,uploadDate,duration,used,out,ts}
+let cur=null;   // 지금 보고 있는 기록
+let running=null;
+let posting=false;
+
+function toast(msg){const t=$('#toast');t.textContent=msg;t.classList.add('on');clearTimeout(toast.t);toast.t=setTimeout(()=>t.classList.remove('on'),2400)}
+function status(text,err){const s=$('#status');s.textContent=text;s.classList.toggle('err',!!err)}
+// 이 PC의 서버(START를 실행하면 뜨는 검은 창)를 부른다. 창이 꺼져 있으면 무엇을 해야 하는지 알려 준다.
+const OFFLINE='검은 창(START)이 꺼져 있어 연결할 수 없습니다. 폴더의 START를 다시 더블클릭한 뒤 이 화면을 새로고침(F5)하세요.';
+async function call(p,opt){
+  try{return await fetch(p,opt)}
+  catch(e){if(e?.name==='AbortError')throw e;throw new Error(OFFLINE)}
+}
+const api={
+  async get(p,signal){const r=await call(p,{cache:'no-store',signal});const j=await r.json().catch(()=>({error:'서버 응답을 읽지 못했습니다'}));if(!r.ok)throw new Error(j.error||'HTTP '+r.status);return j},
+  async post(p,body,keepalive){
+    const r=await call(p,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body),keepalive});
+    const j=await r.json().catch(()=>({}));
+    if(!r.ok)throw Object.assign(new Error(j.error||'HTTP '+r.status),{status:r.status,body:j});
+    return j;
+  },
+};
+
+/* ----- 기록 저장: PC의 data/content.json 파일이 원본이다. 브라우저에는 저장하지 않는다. -----
+   파일을 읽어 온 뒤에만 저장할 수 있고(loaded), 그사이 다른 창에서 파일이 바뀌었으면 덮어쓰지 않고 합쳐서 다시 보낸다. */
+let saveT, unsaved=false, loaded=false, contentBase=0;
+const mergeItems=(a,b)=>{ // 같은 영상은 더 나중 것을 남기고, 최근 것부터 정렬
+  const m=new Map();
+  for(const it of [...a,...b]){const o=m.get(it.id);if(!o||Math.max(it.ts||0,it.postedAt||0)>=Math.max(o.ts||0,o.postedAt||0))m.set(it.id,it)}
+  return [...m.values()].sort((x,y)=>(y.ts||0)-(x.ts||0)).slice(0,MAX_ITEMS);
+};
+async function flushItems(keepalive){
+  clearTimeout(saveT);
+  if(!unsaved||!loaded||!server)return;
+  unsaved=false;
+  try{
+    for(let i=0;i<3;i++){
+      try{contentBase=(await api.post('/api/content',{items,_base:contentBase},keepalive))._ts;return}
+      catch(e){
+        if(e.status!==409||!Array.isArray(e.body?.current?.items))throw e;
+        const curId=cur?.id; // 다른 창에서 저장한 기록과 합친다
+        items=mergeItems(e.body.current.items,items);contentBase=e.body.current._ts||0;
+        if(curId)cur=items.find(x=>x.id===curId)||cur;
+        renderHistory();
+      }
+    }
+    throw new Error('conflict');
+  }catch{unsaved=true;toast('⚠ 저장 실패 — 검은 창(START)이 켜져 있는지 확인')}
+}
+function save(){unsaved=true;clearTimeout(saveT);saveT=setTimeout(flushItems,300)}
+addEventListener('pagehide',()=>flushItems(true));
+setInterval(()=>{if(unsaved)flushItems()},5000); // 저장에 실패한 것은 계속 다시 시도한다
+async function loadItems(){ // 읽지 못하면 오류를 던진다 (빈 목록으로 저장해 파일을 덮는 일이 없게)
+  const remote=await api.get('/api/content');
+  items=Array.isArray(remote.items)?remote.items:[];
+  contentBase=remote._ts||0;loaded=true;
+}
+
+/* ----- 화면 ----- */
+const thumbUrl=id=>`https://i.ytimg.com/vi/${encodeURIComponent(id)}/hqdefault.jpg`;
+/* 유튜브 임베드: 처음에는 썸네일만 보여 주고(썸네일 분석에 필요), 누르면 그 자리에서 재생한다 */
+let playId='';
+function resetPlayer(){ // 플레이어를 치우고 썸네일로 되돌린다 (재생 중이던 소리도 멈춘다)
+  $('#player iframe')?.remove();
+  $('#player').classList.remove('playing');
+  $('#thumb').hidden=false;$('#play').hidden=false;
+}
+function playVideo(){
+  if(!playId||$('#player iframe'))return;
+  const f=document.createElement('iframe');
+  f.src=`https://www.youtube.com/embed/${encodeURIComponent(playId)}?autoplay=1&rel=0&playsinline=1`;
+  f.title='유튜브 영상';
+  f.allow='accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share';
+  f.allowFullscreen=true;
+  f.referrerPolicy='strict-origin-when-cross-origin'; // 없으면 유튜브가 "오류 153"으로 재생을 막는다
+  $('#thumb').hidden=true;$('#play').hidden=true;
+  $('#player').classList.add('playing');
+  $('#player').append(f);
+}
+$('#player').addEventListener('click',playVideo);
+function showVideo(it,v){ // it: 기록(또는 방금 받은 영상), v: 서버가 준 원본 데이터(있을 때만 — 썸네일 원본과 도입부 화면 표시)
+  $('#videoCard').hidden=false;
+  resetPlayer();playId=it.id||videoId(it.url)||'';
+  $('#thumb').src=v?.thumbnail?`data:${v.thumbnail.media_type};base64,${v.thumbnail.data}`:thumbUrl(it.id);
+  const a=$('#vTitle');a.textContent=it.title||it.url;a.href=it.url;
+  $('#vMeta').textContent=[it.channel,it.viewCount!=null?`조회수 ${won(it.viewCount)}회`:'',it.uploadDate,it.duration?hms(it.duration):''].filter(Boolean).join(' · ');
+  $('#vUsed').textContent=it.used?`분석 근거: ${it.used}`:'';
+  $('#frames').replaceChildren(...(v?.frames||[]).map(f=>{
+    const fig=document.createElement('figure');
+    const im=document.createElement('img');im.src=`data:${f.media_type};base64,${f.data}`;im.alt=`도입부 ${f.t}초 화면`;
+    const cap=document.createElement('figcaption');cap.textContent=f.t+'초';
+    fig.append(im,cap);return fig;
+  }));
+}
+let editing=false;
+function showResult(text){
+  $('#resultCard').hidden=false;
+  $('#rendered').innerHTML=text.trim()?mdToHtml(text):'<p class="empty">분석 결과가 여기에 표시됩니다.</p>';
+  if(document.activeElement!==$('#raw'))$('#raw').value=text;
+}
+function setEditing(on){
+  editing=on;
+  $('#raw').hidden=!on;$('#rendered').hidden=on;
+  $('#toggleEdit').textContent=on?'✔ 수정 끝':'✏️ 수정';
+}
+function showItem(it,keepInput){ // keepInput: 링크 입력 칸은 건드리지 않는다 (화면을 열 때 지난 분석을 다시 보여 주는 경우)
+  cur=it;setEditing(false);
+  if(!keepInput)$('#url').value=it.url;
+  showVideo(it);showResult(it.out||'');renderHistory();renderPost();pstatus('');
+}
+function pstatus(text,err){const s=$('#postStatus');s.textContent=text;s.classList.toggle('err',!!err)}
+function renderPost(){ // 올릴 제목 미리 보여 주기, 올린 뒤에는 글 링크
+  $('#postBox').hidden=!server?.aside; // Aside가 없는 PC에서는 긱어스에 올리기를 보이지 않는다
+  const info=$('#postInfo'), ready=!!cur?.out?.trim();
+  $('#postGeekus').disabled=!ready||posting;
+  info.replaceChildren();
+  if(!ready)return;
+  if(cur.postUrl){
+    const a=document.createElement('a');a.href=cur.postUrl;a.target='_blank';a.rel='noopener';a.textContent=cur.postUrl;
+    const d=new Date(cur.postedAt||Date.now());
+    info.append(`긱어스에 올린 글 (${d.getMonth()+1}/${d.getDate()}): `,a);
+    return;
+  }
+  const title=postTitle(getProfile(),cur);
+  info.textContent=title?`올릴 제목: ${title} · 카테고리: ${GEEKUS_CATEGORY}`
+    :'기수와 이름이 없어 글 제목을 만들 수 없습니다. ⚙ 설정에서 먼저 입력하세요.';
+}
+function renderHistory(){
+  $('#historyCard').hidden=!items.length;
+  $('#history').replaceChildren(...items.map(it=>{
+    const row=document.createElement('div');row.className='hrow'+(it===cur?' on':'');row.dataset.id=it.id;row.tabIndex=0;
+    const im=document.createElement('img');im.src=thumbUrl(it.id);im.alt='';im.loading='lazy';
+    const t=document.createElement('div');t.className='t';
+    const b=document.createElement('b');b.textContent=it.title||it.url;
+    const d=new Date(it.ts), sp=document.createElement('span');
+    sp.textContent=[it.channel,`${d.getMonth()+1}/${d.getDate()} 분석`].filter(Boolean).join(' · ');
+    t.append(b,sp);
+    const del=document.createElement('button');del.type='button';del.className='del';del.title='기록 삭제';del.setAttribute('aria-label','기록 삭제');del.textContent='×';
+    row.append(im,t,del);return row;
+  }));
+}
+$('#history').addEventListener('click',e=>{
+  const row=e.target.closest('.hrow');if(!row)return;
+  const it=items.find(x=>x.id===row.dataset.id);if(!it)return;
+  if(e.target.closest('.del')){
+    if(!confirm(`"${it.title||it.url}" 분석 기록을 지울까요?`))return;
+    items=items.filter(x=>x!==it);save();
+    if(cur===it){cur=null;resetPlayer();$('#videoCard').hidden=true;$('#resultCard').hidden=true}
+    renderHistory();return;
+  }
+  if(running){toast('분석 중에는 다른 기록을 열 수 없습니다');return}
+  showItem(it);status('');scrollTo({top:0,behavior:'smooth'});
+});
+$('#history').addEventListener('keydown',e=>{if(e.key==='Enter'&&e.target.classList.contains('hrow'))e.target.click()});
+
+$('#toggleEdit').addEventListener('click',()=>{setEditing(!editing);if(editing)$('#raw').focus()});
+$('#raw').addEventListener('input',()=>{
+  if(!cur||running)return;
+  cur.out=$('#raw').value;$('#rendered').innerHTML=mdToHtml(cur.out);save();
+});
+
+/* ----- 복사 ----- */
+$('#copyNotion').addEventListener('click',async()=>{
+  if(!cur?.out?.trim()){toast('복사할 분석 결과가 없습니다');return}
+  const md=exportMd(cur), html=mdToHtml(md);
+  try{
+    await navigator.clipboard.write([new ClipboardItem({
+      'text/html':new Blob([html],{type:'text/html'}),'text/plain':new Blob([md],{type:'text/plain'})})]);
+  }catch{
+    const buf=$('#copyBuf');buf.innerHTML=html;
+    const r=document.createRange();r.selectNodeContents(buf);
+    const sel=getSelection();sel.removeAllRanges();sel.addRange(r);document.execCommand('copy');sel.removeAllRanges();buf.innerHTML='';
+  }
+  toast('복사했습니다 — 노션 페이지에 붙여넣기(Ctrl+V) 하세요');
+});
+$('#copyMd').addEventListener('click',async()=>{
+  if(!cur?.out?.trim()){toast('복사할 분석 결과가 없습니다');return}
+  try{await navigator.clipboard.writeText(exportMd(cur));toast('마크다운을 복사했습니다')}catch{toast('복사하지 못했습니다')}
+});
+
+/* ----- 설정 ----- */
+const DEFAULT_SETTINGS={apiKey:'',model:'claude-opus-5-5'};
+async function loadSettings(){settings={...DEFAULT_SETTINGS,...await api.get('/api/settings')}} // data/settings.json
+async function openSettings(){
+  if(!server){toast('검은 창(START)이 켜져 있어야 설정을 열 수 있습니다');return}
+  try{await loadSettings()}catch{} // 다른 창에서 바꿨을 수 있으니 열 때 다시 읽는다
+  const g=settings.geekus||{}, p=getProfile();
+  $('#sKey').value=settings.apiKey||'';$('#sModel').value=settings.model;
+  $('#geekusBox').hidden=!server.aside; // 긱어스 관련 칸은 Aside가 있는 PC에서만 보인다
+  $('#pCohort').value=p.cohort||'';$('#pName').value=p.name||'';
+  $('#gEmail').value=g.email||'';$('#gPw').value=g.password||'';
+  $('#settingsDlg').showModal();
+}
+$('#openSettings').addEventListener('click',openSettings);
+$('#sCancel').addEventListener('click',()=>$('#settingsDlg').close());
+$('#settingsForm').addEventListener('submit',async()=>{
+  settings={...settings,apiKey:$('#sKey').value.trim(),model:$('#sModel').value};
+  if(!$('#geekusBox').hidden){ // 보이지 않는 칸의 값으로 저장돼 있던 것을 지우지 않는다
+    settings.profile={cohort:$('#pCohort').value.trim().replace(/기$/,''),name:$('#pName').value.trim()};
+    settings.geekus={email:$('#gEmail').value.trim(),password:$('#gPw').value};
+  }
+  client=null;
+  try{await api.post('/api/settings',settings);toast('설정을 저장했습니다');renderPost();if(settings.apiKey&&$('#status').classList.contains('err'))status('')}
+  catch{toast('⚠ 설정을 저장하지 못했습니다 — 검은 창(START)이 켜져 있는지 확인')}
+});
+
+/* ----- 긱어스에 올리기: 서버가 Aside CLI로 내 브라우저에서 글을 쓰고 게시한다 ----- */
+// 서버가 한 줄에 JSON 하나씩 보낸다: 진행 상황(log)을 흘려보내다가 마지막에 결과(done) 또는 오류(error)
+async function postStream(path,body,onLog){
+  const r=await call(path,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});
+  if(!r.ok){const j=await r.json().catch(()=>({}));throw new Error(j.error||'HTTP '+r.status)}
+  const reader=r.body.getReader(), dec=new TextDecoder();
+  let buf='', result=null;
+  for(;;){
+    const {value,done}=await reader.read();
+    if(done)break;
+    buf+=dec.decode(value,{stream:true});
+    let i;
+    while((i=buf.indexOf('\n'))>=0){
+      const line=buf.slice(0,i).trim();buf=buf.slice(i+1);
+      if(!line)continue;
+      const m=JSON.parse(line);
+      if(m.type==='log')onLog(m.text);
+      else if(m.type==='error')throw Object.assign(new Error(m.error),{code:m.code});
+      else if(m.type==='done')result=m;
+    }
+  }
+  if(!result)throw new Error('서버 응답이 중간에 끊겼습니다. 긱어스에서 글이 올라갔는지 먼저 확인해 주세요.');
+  return result;
+}
+const pad2=n=>String(n).padStart(2,'0');
+const dateStr=t=>`${t.getFullYear()}-${pad2(t.getMonth()+1)}-${pad2(t.getDate())}`;
+const todayStr=()=>dateStr(new Date());
+async function postToGeekus(){
+  if(posting)return;
+  if(running){toast('분석이 끝난 뒤에 올릴 수 있습니다');return}
+  const it=cur;
+  if(!it?.out?.trim()){pstatus('올릴 분석 결과가 없습니다',true);return}
+  if(!server){pstatus('검은 창(START)이 켜져 있어야 올릴 수 있습니다',true);return}
+  if(!server.aside){pstatus('Aside CLI가 설치되어 있지 않습니다 (Aside 설정 → Developers → Install)',true);return}
+  const title=postTitle(getProfile(),it);
+  if(!title){pstatus('기수와 이름이 없어 글 제목을 만들 수 없습니다. ⚙ 설정에서 먼저 입력하세요.',true);openSettings();return}
+  if(it.postUrl&&!confirm('이 분석은 이미 긱어스에 올렸습니다.\n다시 올리면 글이 하나 더 생깁니다. 그래도 올릴까요?'))return;
+  if(editing)setEditing(false);
+  posting=true;renderPost();
+  const btn=$('#postGeekus');btn.textContent='올리는 중…';btn.classList.add('busy');
+  try{
+    pstatus('긱어스에 올리는 중…');
+    const g=settings.geekus||{};
+    // video: 글 맨 위에 임베드할 유튜브 영상 (서버가 편집기의 "영상" 버튼으로 넣는다)
+    const r=await postStream('/api/geekus/post',{title,html:geekusHtml(it),video:it.url,email:g.email||'',password:g.password||''},t=>pstatus(t+'…'));
+    it.postUrl=r.url;it.postedAt=Date.now();save();
+    pstatus('게시 완료 ✓');
+  }catch(e){
+    pstatus(e.message||String(e),true);console.error(e);
+    if(e.code==='login_required'||e.code==='login_failed')openSettings();
+  }finally{
+    posting=false;btn.textContent='🚀 긱어스에 올리기';btn.classList.remove('busy');renderPost();
+  }
+}
+$('#postGeekus').addEventListener('click',postToGeekus);
+
+/* ----- Claude API ----- */
+let Anthropic=null, client=null;
+async function getClient(){
+  if(!Anthropic){
+    try{({default:Anthropic}=await import('https://esm.sh/@anthropic-ai/sdk@1.7.0'))}
+    catch{throw new Error('Claude SDK를 불러오지 못했습니다. 인터넷 연결을 확인하세요.')}
+  }
+  // 브라우저에서 직접 호출: 키는 사용자가 직접 입력하고 이 PC의 설정 파일에만 보관한다
+  client??=new Anthropic({apiKey:getSettings().apiKey,dangerouslyAllowBrowser:true});
+  return client;
+}
+function explain(e){
+  if(Anthropic){
+    if(e instanceof Anthropic.AuthenticationError)return 'API 키가 올바르지 않습니다. ⚙ 설정에서 확인하세요.';
+    if(e instanceof Anthropic.PermissionDeniedError)return '이 키로는 해당 모델/기능을 쓸 수 없습니다.';
+    if(e instanceof Anthropic.RateLimitError)return '요청 한도를 넘었습니다. 잠시 후 다시 시도하세요.';
+    if(e instanceof Anthropic.APIConnectionError)return '네트워크 연결에 실패했습니다.';
+    if(e instanceof Anthropic.APIError)return `API 오류 (${e.status}): ${e.message}`;
+  }
+  return e.message||String(e);
+}
+
+/* ----- 실행: 영상 데이터 받기 → 화면에 표시 → 규칙대로 분석 ----- */
+async function run(){
+  if(running){running.abort();return}
+  if(posting){toast('긱어스에 올리는 중에는 새로 분석할 수 없습니다');return}
+  const url=$('#url').value.trim(), id=videoId(url);
+  if(!url){status('유튜브 링크를 먼저 입력하세요',true);return}
+  if(id===null){status('유튜브 링크가 아닙니다 (youtube.com 또는 youtu.be 주소를 넣어 주세요)',true);return}
+  if(!server){status('검은 창(START)이 켜져 있어야 분석할 수 있습니다',true);return}
+  if(server.preparing){status('처음 실행 준비가 끝난 뒤에 분석할 수 있습니다. 잠시만 기다려 주세요.',true);return}
+  if(!server.ytdlp){status('유튜브 도구(yt-dlp)가 준비되지 않았습니다. 인터넷 연결을 확인한 뒤 검은 창을 닫고 START를 다시 실행해 주세요.',true);return}
+  if(!getSettings().apiKey){openSettings();status('⚙ 설정에 Claude API 키를 먼저 넣어 주세요',true);return}
+  const prev=id?items.find(x=>x.id===id):null;
+  if(prev?.out?.trim()&&!confirm('이 영상은 이미 분석한 결과가 있습니다. 새로 분석해 덮어쓸까요?')){showItem(prev);status('이전 분석 결과를 불러왔습니다');return}
+
+  const ac=new AbortController(); let stream=null;
+  running={abort(){ac.abort();stream?.abort()}};
+  const btn=$('#run');btn.textContent='■ 중단';btn.classList.add('busy');
+  try{
+    status('영상 데이터 받는 중… (제목 · 썸네일 · 자막 · 도입부 화면)');
+    const v=await api.get('/api/youtube?url='+encodeURIComponent(url),ac.signal);
+    const built=buildRequest(v);
+    const it={id:v.id,url:v.url,title:v.title,channel:v.channel,viewCount:v.viewCount,uploadDate:v.uploadDate,duration:v.duration,used:built.note,out:'',ts:Date.now()};
+    const old=items.find(x=>x.id===v.id);
+    if(old?.postUrl){it.postUrl=old.postUrl;it.postedAt=old.postedAt} // 이미 긱어스에 올린 영상이면 그 사실을 이어 간다 (실수로 두 번 올리지 않게)
+    cur=null;setEditing(false);showVideo(it,v);showResult('');renderPost();pstatus('');
+
+    status('분석 중…');
+    const s=getSettings(), haiku=s.model==='claude-haiku-5-5';
+    const params={model:s.model,max_tokens:32000,system:SYSTEM,output_config:{effort:'medium'},
+      messages:[{role:'user',content:built.content}]};
+    // 안전 분류기가 거절하면 서버가 다른 모델로 이어서 답하도록 한다 (Haiku는 미지원)
+    if(!haiku){params.betas=['server-side-fallback-2026-07-01'];params.fallbacks='default'}
+    const c=await getClient();
+    if(ac.signal.aborted)throw new DOMException('aborted','AbortError');
+    let live='', queued=false;
+    stream=c.beta.messages.stream(params);
+    stream.on('text',t=>{
+      live+=t;status('작성 중…');
+      if(!queued){queued=true;requestAnimationFrame(()=>{queued=false;if(running)showResult(live)})}
+    });
+    const msg=await stream.finalMessage();
+    if(msg.stop_reason==='refusal')throw new Error('모델이 이 요청에 답하지 않았습니다. 다른 영상으로 다시 시도하세요.');
+    const text=msg.content.filter(b=>b.type==='text').map(b=>b.text).join('').trim();
+    if(!text)throw new Error('빈 응답을 받았습니다. 다시 시도하세요.');
+    it.out=text;
+    items=[it,...items.filter(x=>x.id!==it.id)].slice(0,MAX_ITEMS);save();
+    cur=it;showResult(text);renderHistory();renderPost();
+    if(msg.stop_reason==='max_tokens')status('길이 제한으로 중간에 끊겼습니다',true);
+    else status('완료 ✓ · '+built.note);
+  }catch(e){
+    if(ac.signal.aborted)status('중단했습니다');
+    else{status(explain(e),true);console.error(e)}
+    if(!cur){ // 끝까지 가지 못했으면 반쯤 쓴 결과는 지운다
+      $('#resultCard').hidden=true;
+      const last=items.find(x=>x.id===id);
+      if(last)showItem(last);
+    }
+  }finally{
+    running=null;btn.textContent='✨ 분석';btn.classList.remove('busy');
+  }
+}
+$('#run').addEventListener('click',run);
+$('#url').addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.isComposing){e.preventDefault();run()}});
+
+/* ----- 시작 ----- */
+function updateHint(){
+  $('#hint').textContent=!server?'폴더의 START를 더블클릭해 실행한 화면에서만 분석할 수 있습니다.'
+    :server.preparing?`처음 실행 준비 중입니다 (${server.preparing}). 검은 창에서 진행 상황을 볼 수 있고, 끝나면 이 안내가 자동으로 바뀝니다.`
+    :!server.ytdlp?'유튜브 도구(yt-dlp)가 준비되지 않아 영상 데이터를 받을 수 없습니다. 인터넷 연결을 확인한 뒤 검은 창을 닫고 START를 다시 실행해 주세요.'
+    :`링크를 넣으면 영상의 제목 · 썸네일 · 자막${server.ffmpeg?' · 도입부 화면':''}을 받아 정해진 양식(썸네일 · 제목 · 도입부 분석과 디벨롭)으로 분석합니다.`;
+}
+// 서버에 연결해 설정과 분석 기록을 파일에서 읽어 온다. 하나라도 읽지 못하면 false.
+async function connect(){
+  try{
+    const h=await api.get('/api/health');
+    if(!h.ok)return false;
+    server=h;
+    await loadSettings();
+    await loadItems();
+    return true;
+  }catch{return false}
+}
+async function init(){
+  if(!/^https?:$/.test(location.protocol)){
+    updateHint();status('이 파일을 직접 열면 동작하지 않습니다. 폴더의 START를 더블클릭해 실행해 주세요.',true);
+    return;
+  }
+  while(!(await connect())){ // 읽지 못하면 빈 화면으로 시작하지 않고, 읽힐 때까지 다시 시도한다
+    server=null;updateHint();
+    status('검은 창(START)과 연결되지 않아 기록을 불러오지 못했습니다. 검은 창이 꺼져 있으면 폴더의 START를 다시 더블클릭하세요. 연결되면 자동으로 불러옵니다.',true);
+    await new Promise(r=>setTimeout(r,2000));
+  }
+  status('');updateHint();
+  renderHistory();renderPost();
+  // 오늘 분석한 기록이 있으면 화면을 열 때 바로 보여 준다 (여러 개면 가장 최근 것). 다른 날 기록은 "최근 분석"에서 눌러 본다.
+  const todays=items.filter(x=>dateStr(new Date(x.ts))===todayStr()).sort((a,b)=>b.ts-a.ts)[0];
+  if(todays)showItem(todays,true); // 링크 입력 칸은 비워 둔다
+  document.documentElement.dataset.ready='1';
+  if(!settings.apiKey)openSettings(); // 처음 쓰는 PC에서는 API 키부터 넣도록 설정 창을 연다
+  while(server.preparing){ // 처음 실행 준비(도구 받기)가 끝날 때까지 상태를 다시 확인한다
+    await new Promise(r=>setTimeout(r,2000));
+    try{server=await api.get('/api/health')}catch{}
+    updateHint();renderPost();
+  }
+}
+init();
+})()}
+</script>
+</body>
+</html>
