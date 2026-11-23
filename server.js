@@ -4,7 +4,7 @@
 //  - 분석 기록과 설정을 data/ 폴더에 JSON 파일로 저장
 //  - 유튜브 링크에서 영상 정보 · 자막 · 썸네일 · 도입부 화면을 받아옴 (yt-dlp, ffmpeg)
 //    두 도구는 PC에 없으면 처음 실행할 때 bin/ 폴더에 자동으로 받는다
-//  - (선택) Aside CLI가 설치돼 있으면 내 브라우저로 긱어스에 글을 올림
+//  - 분석 결과를 긱어스에 글로 올림: PC에 있는 엣지(또는 크롬)를 화면 없이 띄워 조종한다. 따로 설치할 것이 없다
 // 실행: START.bat 더블클릭  (또는 node server.js --open)
 
 const http = require('node:http');
@@ -370,307 +370,406 @@ async function getVideo(url) {
   }
 }
 
-/* ---------- Aside CLI (선택) ---------- */
-// Aside 브라우저와 그 CLI가 설치된 PC에서만 쓰는 기능이다. 없으면 화면에 긱어스에 올리기 버튼이 나오지 않는다.
-const MARK_START = '<<<CJ_RESULT>>>', MARK_END = '<<<CJ_END>>>';
-const REPL_TIMEOUT = 150 * 1000; // aside repl 자체 제한(120초)보다 조금 길게
-
-let asideCli = null;
-async function findAside() {
-  if (asideCli) return asideCli;
-  const cands = [process.env.ASIDE_CLI, 'aside'];
-  if (process.env.LOCALAPPDATA) { // Windows 설치 스크립트의 기본 위치 (실행 파일은 current 폴더 안에 있다)
-    const dir = path.join(process.env.LOCALAPPDATA, 'Aside', 'CLI');
-    cands.push(path.join(dir, 'current', 'aside.exe'));
-    try {
-      const exes = (await fsp.readdir(dir)).filter(n => /^aside.*\.exe$/i.test(n));
-      const pick = exes.find(n => n.toLowerCase() === 'aside.exe') || exes[0];
-      if (pick) cands.push(path.join(dir, pick));
-    } catch {}
-  }
-  for (const c of cands.filter(Boolean)) {
-    try { await deps.run(c, ['--version'], { timeout: 20000 }); asideCli = c; break; }
-    catch (e) { if (e.code !== 'ENOENT') { asideCli = c; break; } } // 실행은 됐는데 옵션만 다른 경우도 설치된 것으로 본다
-  }
-  return asideCli;
-}
-
-const stripAnsi = s => s.replace(/\x1B(?:\[[0-?]*[ -/]*[@-~]|\][^\x07\x1B]*(?:\x07|\x1B\\)|[@-Z\\-_])/g, '');
-// 진행 표시가 같은 줄을 덮어쓰는 경우(\r) 마지막 상태만 남긴다
-const cleanLine = l => stripAnsi(l).split('\r').filter(Boolean).pop()?.trim() || '';
-const cleanOutput = s => s.split('\n').map(l => stripAnsi(l).split('\r').filter(Boolean).pop() || '').join('\n');
-// 표시가 줄 전체를 차지할 때만 인정한다 (CLI가 지시문을 그대로 되풀이해 출력해도 걸리지 않게)
-function extractMarked(text) {
-  const lines = text.split('\n'); let s = -1, e = -1;
-  lines.forEach((l, i) => {
-    const t = l.trim();
-    if (t === MARK_START) { s = i; e = -1; } else if (t === MARK_END && s >= 0 && e < 0) e = i;
-  });
-  return s < 0 ? null : lines.slice(s + 1, e > s ? e : undefined).join('\n').trim();
-}
-
+/* ---------- 브라우저 조종 (긱어스에 글 올리기용) ---------- */
+// PC에 설치된 엣지(윈도우에 기본으로 들어 있다)나 크롬을 화면 없이 띄워 DevTools 프로토콜로 조종한다. 따로 설치할 것이 없다.
+// 평소 쓰는 브라우저와 섞이지 않게 전용 프로필(data/browser)을 쓰고, 긱어스 로그인 상태는 그 안에 남는다.
+const BROWSER_PROFILE = path.join(DATA, 'browser');
+const sleep = ms => new Promise(r => setTimeout(r, ms));
 function killTree(child) {
-  if (process.platform === 'win32' && child.pid) execFile('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true }, () => {});
+  if (WIN && child.pid) execFile('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true }, () => {});
   else child.kill();
 }
-// aside를 실행해 끝날 때까지 기다린다. 시간 초과 · 중단 때는 자식 프로세스까지 끝낸다.
-function runAside(cli, args, { input, onData, signal, timeout = REPL_TIMEOUT } = {}) {
-  return new Promise((resolve, reject) => {
-    let child;
-    try { child = deps.spawn(cli, args, { windowsHide: true, stdio: [input == null ? 'ignore' : 'pipe', 'pipe', 'pipe'] }); }
-    catch (e) { return reject(e); }
-    let out = '', all = '', done = false;
-    const kill = () => killTree(child);
-    const finish = (fn, v) => { if (done) return; done = true; clearTimeout(timer); if (signal) signal.removeEventListener('abort', onAbort); fn(v); };
-    const timer = setTimeout(() => { kill(); finish(reject, httpError(504, `Aside가 ${timeout / 60000}분 안에 끝나지 않았습니다`)); }, timeout);
-    const onAbort = () => { kill(); finish(reject, httpError(499, '중단했습니다')); };
-    if (signal) { if (signal.aborted) onAbort(); else signal.addEventListener('abort', onAbort); }
-    child.stdout.setEncoding('utf8'); child.stderr.setEncoding('utf8');
-    child.stdout.on('data', d => { out += d; all += d; if (onData) onData(d); });
-    child.stderr.on('data', d => { all += d; if (onData) onData(d); });
-    child.on('error', e => finish(reject, e.code === 'ENOENT' ? httpError(501, 'Aside CLI를 실행하지 못했습니다') : e));
-    child.on('close', code => finish(resolve, { code, out, all }));
-    if (input != null) { child.stdin.on('error', () => {}); child.stdin.end(input); }
-  });
+let browserPath = null;
+async function findBrowser() {
+  if (browserPath && await exists(browserPath)) return browserPath;
+  const dirs = [process.env['ProgramFiles(x86)'], process.env.ProgramFiles, process.env.LOCALAPPDATA].filter(Boolean);
+  const cands = [process.env.CJ_BROWSER,
+    ...dirs.map(d => path.join(d, 'Microsoft', 'Edge', 'Application', 'msedge.exe')),
+    ...dirs.map(d => path.join(d, 'Google', 'Chrome', 'Application', 'chrome.exe')),
+    await onPath('msedge'), await onPath('chrome')];
+  browserPath = null;
+  for (const c of cands) { if (c && await exists(c)) { browserPath = c; break; } }
+  return browserPath;
 }
 
-/* ---------- Aside CLI: 긱어스에 글 올리기 ---------- */
-// 할 수 있는 일을 한 가지로 고정한다: AG 마스터마인드의 "컨텐츠저널링" 카테고리에 글 하나를 게시하고 그 글 주소를 돌려준다
-const GEEKUS = { write: 'https://geekus.kr/ag-mastermind/post/write', home: 'https://geekus.kr/ag-mastermind', category: '컨텐츠저널링' };
-const GEEKUS_POST_RE = /^https:\/\/geekus\.kr\/ag-mastermind\/post\/\d+$/;
-const STEP_MARK = '<<<CJ_STEP>>>';
-// aside repl에서 돌리는 고정 스크립트. __DATA__ 자리에만 글 내용(JSON)이 들어간다.
-// 순서: 글쓰기 화면 열기 → (로그인이 풀려 있으면 로그인) → 카테고리 · 제목 · 본문 넣기 → 제대로 들어갔는지 확인 → 게시 → 글 주소 얻기
-const GEEKUS_POST_SCRIPT = String.raw`await (async () => {
-  const D = __DATA__;
-  let step = '', tab = null; // 지금 하고 있는 단계와 작업 중인 탭 (오류가 나면 단계와 그때의 화면 주소를 함께 알린다)
-  const here = () => { try { return tab ? tab.url() : ''; } catch (_) { return ''; } };
-  const T0 = Date.now(); // Aside는 출력을 끝날 때 한꺼번에 넘기므로, 단계가 시작된 시각은 여기서 직접 잰다
-  const say = t => { step = t; console.log('${STEP_MARK}' + (Date.now() - T0) + '|' + t); };
-  const done = o => { console.log('${MARK_START}'); console.log(JSON.stringify(o)); console.log('${MARK_END}'); };
-  const fail = (code, error, extra) => done(Object.assign({ ok: false, code: code, error: error, step: step, at: here() }, extra || {}));
-  const clean = u => String(u).split(/[?#]/)[0].replace(/\/$/, '');
-  const postUrl = u => { const m = clean(u).match(/^https:\/\/geekus\.kr\/ag-mastermind\/post\/\d+$/); return m ? m[0] : ''; };
-  const oneLine = s => String(s || '').replace(/\s+/g, ' ').trim();
-  const run = async () => {
-
-  say('글쓰기 화면 여는 중');
-  tab = await openTab(D.write);
-  if (clean(tab.url()) !== D.write) { // 로그인이 풀려 있으면 소개 화면으로 돌려보낸다
-    if (!D.email || !D.password) return fail('login_required', '긱어스 로그인이 풀려 있습니다. ⚙ 설정에 긱어스 이메일과 비밀번호를 넣거나, Aside에서 geekus.kr에 로그인한 뒤 다시 시도하세요.');
-    say('긱어스에 로그인하는 중');
-    const LOGIN = 'https://geekus.kr/login';
-    const has = sel => tab.evaluate(s => !!document.querySelector(s), sel);
-    await tab.goto(LOGIN);
-    for (let i = 0; i < 30 && !(await has('input[name="password"]')); i++) await sleep(300);
-    // 지난 계정을 기억해 비밀번호만 묻는 화면에서는 계정 칸이 type="hidden"으로 남아 있다. 숨은 칸은 입력할 수 없으므로 보이는 칸만 센다.
-    const ID = 'input[name="identifier"]:not([type="hidden"])', PW = 'input[name="password"]:not([type="hidden"])';
-    const remembered = await tab.evaluate(() => { const el = document.querySelector('input[name="identifier"][type="hidden"]'); return el ? el.value : ''; });
-    const sameAccount = !(await has(ID)) && remembered.trim().toLowerCase() === String(D.email).trim().toLowerCase(); // 기억된 계정이 설정의 계정과 같으면 비밀번호만 넣는다
-    if (!sameAccount && !(await has(ID))) { // 다른 계정이 기억돼 있으면 계정 입력 화면으로 바꾼다
-      await snapshot(tab, { interactive: true });
-      await tab.getByRole('button', { name: '변경', exact: true }).click();
-      for (let i = 0; i < 20 && !(await has(ID)); i++) await sleep(300);
-    }
-    if ((!sameAccount && !(await has(ID))) || !(await has(PW))) return fail('login_failed', '긱어스 로그인 화면에서 입력 칸을 찾지 못했습니다. Aside에서 geekus.kr에 직접 로그인한 뒤 다시 시도하세요.');
-    say(sameAccount ? '기억된 계정으로 비밀번호 넣는 중' : '이메일 · 비밀번호 넣는 중');
-    if (!sameAccount) await tab.locator(ID).fill(D.email);
-    await tab.locator(PW).fill(D.password);
-    await snapshot(tab, { interactive: true });
-    say('로그인 버튼 누르고 결과 기다리는 중');
-    await tab.locator('button[type="submit"]').click();
-    for (let i = 0; i < 30 && clean(tab.url()) === LOGIN; i++) await sleep(500); // 로그인되면 다른 화면으로 넘어간다
-    if (clean(tab.url()) === LOGIN) return fail('login_failed', '긱어스 로그인에 실패했습니다. ⚙ 설정의 긱어스 이메일과 비밀번호를 확인하세요.');
-    say('로그인 완료, 글쓰기 화면으로 돌아가는 중');
-    await tab.goto(D.write);
-    if (clean(tab.url()) !== D.write) return fail('login_failed', '긱어스 로그인에 실패했습니다. ⚙ 설정의 긱어스 이메일과 비밀번호를 확인하세요.');
-  }
-
-  say('글쓰기 화면 준비 기다리는 중');
-  let formReady = false;
-  for (let i = 0; i < 40; i++) { // 글쓰기 화면이 다 준비될 때까지 (편집기가 붙으면 폼도 준비된 것)
-    const ready = await tab.evaluate(() => { const el = document.querySelector('main .ProseMirror'); return !!(el && el.editor && document.querySelector('main [role="combobox"]') && document.querySelector('main textarea.editor-title-input')); });
-    if (ready) { formReady = true; break; }
-    await sleep(300);
-  }
-  if (!formReady) return fail('not_ready', '글쓰기 화면이 12초 안에 준비되지 않았습니다. (편집기 · 카테고리 · 제목 칸 중 찾지 못한 것이 있습니다)');
-  say('카테고리 고르는 중');
-  let cats = [];
-  for (let i = 0; i < 3 && !cats.length; i++) { // 카테고리 목록 열기: 열리지 않았으면 다시 누른다
-    const open = await tab.evaluate(() => document.querySelector('main [role="combobox"]')?.getAttribute('aria-expanded') === 'true');
-    if (!open) await tab.locator('main [role="combobox"]').click();
-    for (let j = 0; j < 10 && !cats.length; j++) {
-      await sleep(200);
-      cats = await tab.evaluate(() => [...document.querySelectorAll('[role="option"]')].map(o => (o.innerText || '').trim()));
-    }
-  }
-  await snapshot(tab, { interactive: true });
-  if (!cats.includes(D.category)) {
-    await tab.keyboard.press('Escape');
-    return fail('no_category', '"' + D.category + '" 카테고리를 찾지 못했습니다. (있는 카테고리: ' + cats.join(', ') + ')');
-  }
-  await tab.getByRole('option', { name: D.category, exact: true }).click();
-  say('제목 넣는 중');
-  await tab.locator('main textarea.editor-title-input').fill(D.title);
-  say('본문 편집기 비우는 중');
-  const hasEditor = await tab.evaluate(() => {
-    const el = document.querySelector('main .ProseMirror'), ed = el && el.editor;
-    if (ed) ed.chain().focus().clearContent(true).run();
-    return !!ed;
-  });
-  if (!hasEditor) return fail('editor', '본문 편집기를 찾지 못해 게시하지 않았습니다.');
-  // 본문 맨 위: 편집기의 "영상" 버튼으로 유튜브 영상을 임베드한다 (동영상 추가 창에 링크를 넣고 "추가")
-  let embedded = false;
-  if (D.video) {
-    say('유튜브 영상 임베드하는 중');
-    const LINK = 'input[placeholder="YouTube, Loom, Vimeo 링크"]';
-    const has = sel => tab.evaluate(s => !!document.querySelector(s), sel);
-    await snapshot(tab, { interactive: true });
-    await tab.locator('main form button[aria-label="영상"]').click();
-    for (let i = 0; i < 25 && !(await has(LINK)); i++) await sleep(200);
-    if (await has(LINK)) {
-      await tab.locator(LINK).fill(D.video);
-      await snapshot(tab, { interactive: true });
-      await tab.getByRole('button', { name: '추가', exact: true }).click();
-      for (let i = 0; i < 30 && !embedded; i++) {
-        await sleep(200);
-        embedded = await tab.evaluate(() => (document.querySelector('main .ProseMirror').editor.getJSON().content || []).some(n => n.type === 'videoAttachment'));
-      }
-    }
-    if (!embedded) { // 영상 없이 올리지 않는다: 열려 있는 창을 닫고 멈춘다
-      await tab.keyboard.press('Escape');
-      return fail('embed_failed', '유튜브 영상을 글에 임베드하지 못해 게시하지 않았습니다. (긱어스 편집기의 영상 추가 창이 바뀌었을 수 있습니다)');
-    }
-  }
-  // 그 아래에 분석 내용을 이어 붙인다
-  say('본문 넣는 중');
-  const body = await tab.evaluate(h => {
-    const ed = document.querySelector('main .ProseMirror').editor;
-    ed.chain().focus('end').insertContent(h).run();
-    return { ok: ed.getText().trim().length > 0, chars: ed.getText().length, blocks: (ed.getJSON().content || []).map(n => n.type) };
-  }, D.html);
-  if (!body.ok) return fail('editor', '본문 편집기에 내용을 넣지 못해 게시하지 않았습니다.');
-  // 넣은 것이 실제로 들어갔는지 확인한 뒤에만 게시한다
-  say('넣은 내용 확인 중');
-  const state = await tab.evaluate(() => {
-    const btn = [...document.querySelectorAll('main form button')].find(b => (b.innerText || '').trim() === '게시');
-    return {
-      category: (document.querySelector('main [role="combobox"]').innerText || '').trim(),
-      title: document.querySelector('main textarea.editor-title-input').value,
-      canPost: !!btn && !btn.disabled,
-    };
-  });
-  if (state.category !== D.category || state.title !== D.title || !state.canPost) {
-    const why = [];
-    if (state.category !== D.category) why.push('카테고리가 "' + state.category + '"로 되어 있음');
-    if (state.title !== D.title) why.push('제목이 다르게 들어감 ("' + String(state.title).slice(0, 40) + '")');
-    if (!state.canPost) why.push('게시 버튼이 없거나 눌리지 않는 상태');
-    return fail('not_ready', '글쓰기 화면에 내용이 제대로 들어가지 않아 게시하지 않았습니다: ' + why.join(', '), { state: state });
-  }
-  if (D.dryRun) return done({ ok: true, dryRun: true, state: state, chars: body.chars, embedded: embedded, blocks: body.blocks }); // 시험용: 게시 직전에 멈춘다
-
-  say('게시하는 중');
-  await snapshot(tab, { interactive: true });
-  await tab.getByRole('button', { name: '게시', exact: true }).click(); // 게시 버튼은 여기서 한 번만 누른다
-  let url = '', confirmed = false;
-  for (let i = 0; i < 60 && !url; i++) {
-    await sleep(500);
-    url = postUrl(tab.url());
-    if (url || clean(tab.url()) !== D.write) break; // 글 화면 또는 글 목록으로 넘어갔다
-    if (!confirmed && i >= 3) { // 확인 창이 뜨는 경우 한 번만 눌러 준다
-      confirmed = await tab.evaluate(() => {
-        const d = document.querySelector('[role="alertdialog"],[role="dialog"]');
-        const b = d && [...d.querySelectorAll('button')].find(x => ['게시', '게시하기', '확인', '등록'].includes((x.innerText || '').trim()));
-        if (b) b.click();
-        return !!b;
-      });
-    }
-  }
-  if (!url) { // 글 화면으로 바로 넘어가지 않은 경우: 글 목록에서 방금 올린 제목의 글을 눌러 주소를 얻는다
-    say('올린 글 주소 확인 중');
-    tab.on('dialog', d => d.accept().catch(() => {}));
-    if (clean(tab.url()) !== D.home) await tab.goto(D.home);
-    for (let i = 0; i < 10 && !url; i++) {
-      await sleep(700);
-      const hit = await tab.evaluate(t => {
-        const h = [...document.querySelectorAll('main h3')].find(x => (x.innerText || '').replace(/\s+/g, ' ').trim() === t);
-        if (!h) return '';
-        const a = h.querySelector('a') || h.closest('a');
-        if (a && a.getAttribute('href')) return a.href;
-        h.click();
-        return 'clicked';
-      }, oneLine(D.title));
-      if (hit === 'clicked') { for (let j = 0; j < 12 && !url; j++) { await sleep(500); url = postUrl(tab.url()); } }
-      else if (hit) url = postUrl(hit);
-    }
-  }
-  if (url) return done({ ok: true, url: url });
-  return fail('url_not_found', '게시 버튼을 눌렀지만 글 목록에서 올린 글을 찾지 못했습니다. 긱어스에서 글이 올라갔는지 먼저 확인해 주세요. (다시 올리면 글이 두 개가 될 수 있습니다)');
+// 탭 하나를 다루는 도구들. S(method, params)는 그 탭에 DevTools 명령을 보낸다.
+function makeTab(S) {
+  const evaluate = async (fn, arg) => {
+    const r = await S('Runtime.evaluate', { expression: `(${fn})(${arg === undefined ? '' : JSON.stringify(arg)})`, awaitPromise: true, returnByValue: true, userGesture: true });
+    if (r.exceptionDetails) throw new Error((r.exceptionDetails.exception && r.exceptionDetails.exception.description) || r.exceptionDetails.text || '화면에서 스크립트 오류가 났습니다');
+    return r.result.value;
   };
-  try { await run(); } catch (e) { // 예상하지 못한 오류: 어느 단계 · 어느 화면에서 났는지와 오류 원문을 그대로 돌려준다
-    fail('script_error', String((e && e.message) || e), { name: String((e && e.name) || ''), stack: String((e && e.stack) || '').split('\n').slice(0, 8).join('\n') });
-  }
-})();
-`;
+  // 지금 주소. 화면이 넘어가는 도중에도 읽을 수 있게 방문 기록에서 읽는다.
+  const url = async () => { try { const h = await S('Page.getNavigationHistory'); return h.entries[h.currentIndex].url; } catch { return ''; } };
+  const goto = async target => {
+    await S('Page.navigate', { url: target });
+    for (let i = 0; i < 100; i++) { await sleep(200); if (await evaluate(() => document.readyState === 'complete').catch(() => false)) break; }
+  };
+  const has = sel => evaluate(s => !!document.querySelector(s), sel).catch(() => false);
+  // 실제 마우스로 누른다 (목록 열기처럼 마우스 누름에 반응하는 단추는 스크립트로 누르면 열리지 않는다)
+  const clickAt = async (p, what) => {
+    if (!p) throw new Error(`누를 곳을 찾지 못했습니다: ${what}`);
+    const ev = (type, extra) => S('Input.dispatchMouseEvent', { type, x: p.x, y: p.y, button: 'left', clickCount: 1, ...extra });
+    await S('Input.dispatchMouseEvent', { type: 'mouseMoved', x: p.x, y: p.y });
+    await ev('mousePressed', { buttons: 1 }); await ev('mouseReleased', { buttons: 0 });
+  };
+  const click = async sel => clickAt(await evaluate(s => {
+    const el = document.querySelector(s); if (!el) return null;
+    el.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' }); // 부드럽게 넘기는 화면이어도 바로 그 자리에 오게
+    const r = el.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+  }, sel), sel);
+  // 역할(button · option)과 보이는 글자가 정확히 같은 것을 누른다. scope를 주면 그 안에서만, 없으면 열려 있는 창(dialog) 안을 먼저 찾는다.
+  const findRole = (role, name, scope) => evaluate(a => {
+    const norm = s => String(s || '').replace(/\s+/g, ' ').trim();
+    const sel = a.role === 'button' ? 'button,[role="button"]' : `[role="${a.role}"]`;
+    const roots = a.scope ? [...document.querySelectorAll(a.scope)] : [...document.querySelectorAll('[role="dialog"],[role="alertdialog"]'), document];
+    for (const root of roots) {
+      const el = [...root.querySelectorAll(sel)].find(e => {
+        const r = e.getBoundingClientRect();
+        return r.width > 0 && r.height > 0 && !e.disabled && (norm(e.innerText) === a.name || norm(e.getAttribute('aria-label')) === a.name);
+      });
+      if (!el) continue;
+      el.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' });
+      const r = el.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+    }
+    return null;
+  }, { role, name, scope: scope || '' });
+  const clickRole = async (role, name, scope) => clickAt(await findRole(role, name, scope), `${role} "${name}"`);
+  // 입력 칸을 채운다: 칸을 골라 전체 선택한 뒤 글자를 넣는다(키보드로 붙여넣은 것처럼 들어가 화면이 알아챈다). 그래도 다르면 값을 직접 넣는다.
+  const fill = async (sel, value) => {
+    const ok = await evaluate(s => { const el = document.querySelector(s); if (!el) return false; el.scrollIntoView({ block: 'center', behavior: 'instant' }); el.focus(); if (el.select) el.select(); return true; }, sel);
+    if (!ok) throw new Error(`입력 칸을 찾지 못했습니다: ${sel}`);
+    await S('Input.insertText', { text: String(value) });
+    const same = await evaluate(a => document.querySelector(a.sel).value === a.value, { sel, value: String(value) });
+    if (!same) await evaluate(a => {
+      const el = document.querySelector(a.sel), proto = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+      Object.getOwnPropertyDescriptor(proto, 'value').set.call(el, a.value);
+      el.dispatchEvent(new Event('input', { bubbles: true })); el.dispatchEvent(new Event('change', { bubbles: true }));
+    }, { sel, value: String(value) });
+  };
+  const press = async key => { // Escape 같은 키 하나
+    const code = { Escape: 27, Enter: 13 }[key] || 0;
+    for (const type of ['keyDown', 'keyUp']) await S('Input.dispatchKeyEvent', { type, key, code: key, windowsVirtualKeyCode: code });
+  };
+  // 화면이 스스로 동작할 준비(리액트가 그 칸에 붙는 것)가 끝날 때까지 기다린다. 그 전에 넣은 글자는 화면이 준비되면서 지워질 수 있다.
+  const hydrated = async (sel, tries = 80) => {
+    for (let i = 0; i < tries; i++) {
+      const ok = await evaluate(s => { const el = document.querySelector(s); return !!el && Object.keys(el).some(k => k.startsWith('__reactFiber$') || k.startsWith('__reactProps$')); }, sel).catch(() => false);
+      if (ok) return true;
+      await sleep(250);
+    }
+    return false; // 끝내 확인하지 못해도 그대로 진행한다 (넣은 값은 누르기 전에 다시 확인한다)
+  };
+  const value = sel => evaluate(s => { const el = document.querySelector(s); return el ? el.value : null; }, sel).catch(() => null);
+  return { evaluate, url, goto, has, click, findRole, clickRole, fill, press, hydrated, value };
+}
 
-async function geekusPost(cli, post, { onStep } = {}) {
-  const data = { ...GEEKUS, title: post.title, html: post.html, video: post.video || '', email: post.email || '', password: post.password || '', dryRun: !!post.dryRun };
-  // JSON은 그대로 자바스크립트 값으로 쓸 수 있다 (줄 구분 문자만 따로 처리). 스크립트는 표준 입력으로만 넘기므로 비밀번호가 명령줄이나 파일에 남지 않는다.
-  const json = JSON.stringify(data).replace(/[\u2028\u2029]/g, c => String.fromCharCode(92) + 'u' + c.charCodeAt(0).toString(16));
-  let pending = '';
+// 지난번에 띄운 브라우저가 아직 살아 있으면(올리는 도중에 검은 창을 닫은 경우 등) 같은 프로필로 새로 띄울 수 없다. 먼저 정리한다.
+const portFile = path.join(BROWSER_PROFILE, 'DevToolsActivePort');
+const POWERSHELL = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+async function readPort() { // 브라우저가 고른 연결 포트와 주소 (프로필 폴더의 파일에 적힌다)
+  try { const [p, w] = (await fsp.readFile(portFile, 'utf8')).trim().split('\n'); return +p && w ? { port: +p, wsPath: w.trim() } : null; } catch { return null; }
+}
+const portAlive = port => fetch(`http://127.0.0.1:${port}/json/version`, { signal: AbortSignal.timeout(2000) }).then(r => r.ok, () => false);
+// 이 도구의 전용 프로필로 떠 있는 엣지 · 크롬만 골라 끝낸다 (평소 쓰는 브라우저는 건드리지 않는다)
+function killProfileBrowsers() {
+  if (!WIN) return Promise.resolve();
+  const script = "$p=$env:CJ_PROFILE; Get-CimInstance Win32_Process -Filter \"Name='msedge.exe' OR Name='chrome.exe'\" | Where-Object { $_.CommandLine -and $_.CommandLine.Contains($p) } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }";
+  return new Promise(res => execFile(POWERSHELL, ['-NoProfile', '-NonInteractive', '-Command', script],
+    { env: { ...process.env, CJ_PROFILE: BROWSER_PROFILE }, windowsHide: true, timeout: 40000 }, () => res()));
+}
+async function clearOldBrowser() {
+  const old = await readPort();
+  if (old && await portAlive(old.port)) {
+    try { // 살아 있으면 먼저 정상 종료를 시킨다
+      const ws = new WebSocket(`ws://127.0.0.1:${old.port}${old.wsPath}`);
+      await new Promise((res, rej) => { ws.addEventListener('open', res, { once: true }); ws.addEventListener('error', rej, { once: true }); });
+      ws.send(JSON.stringify({ id: 1, method: 'Browser.close' }));
+    } catch {}
+    let alive = true;
+    for (let i = 0; i < 20 && alive; i++) { await sleep(500); alive = await portAlive(old.port); }
+    if (alive) { await killProfileBrowsers(); await sleep(1000); }
+  }
+  await fsp.rm(portFile, { force: true }).catch(() => {});
+}
+
+// 브라우저를 화면 없이 띄우고 탭 하나를 연다. 끝나면 close()로 닫는다.
+async function launchBrowser() {
+  const exe = await findBrowser();
+  if (!exe) throw httpError(501, '엣지나 크롬 브라우저를 찾지 못해 긱어스에 올릴 수 없습니다');
+  if (typeof WebSocket !== 'function') throw httpError(501, '지금 쓰는 Node.js가 오래되어 긱어스에 올릴 수 없습니다 (22 이상 필요)');
+  await fsp.mkdir(BROWSER_PROFILE, { recursive: true });
+  for (let attempt = 0; ; attempt++) {
+    await clearOldBrowser();
+    try { return await startBrowser(exe); }
+    catch (e) {
+      if (attempt >= 1 || !e.retry) throw e;
+      await killProfileBrowsers(); await sleep(1000); // 프로필을 붙잡고 있는 것이 남아 있었을 수 있다. 정리하고 한 번만 다시 띄운다.
+    }
+  }
+}
+async function startBrowser(exe) {
+  const child = deps.spawn(exe, ['--headless=new', '--remote-debugging-port=0', `--user-data-dir=${BROWSER_PROFILE}`, '--window-size=1280,900',
+    '--no-first-run', '--no-default-browser-check', '--disable-extensions', 'about:blank'], { windowsHide: true, stdio: 'ignore' });
+  let exited = false; child.on('exit', () => { exited = true; }); child.on('error', () => { exited = true; });
+  const kill = () => { if (!exited) killTree(child); };
+  try {
+    let at = null;
+    for (let i = 0; i < 240 && !at && !exited; i++) { await sleep(250); at = await readPort(); } // 느린 PC를 생각해 1분까지 기다린다
+    if (!at) throw Object.assign(new Error('브라우저를 시작하지 못했습니다'), { retry: true });
+    const ws = new WebSocket(`ws://127.0.0.1:${at.port}${at.wsPath}`);
+    await new Promise((res, rej) => { ws.addEventListener('open', res, { once: true }); ws.addEventListener('error', () => rej(Object.assign(new Error('브라우저에 연결하지 못했습니다'), { retry: true })), { once: true }); });
+    let seq = 0; const pending = new Map();
+    const send = (method, params = {}, sessionId) => new Promise((resolve, reject) => {
+      const id = ++seq; pending.set(id, { resolve, reject });
+      try { ws.send(JSON.stringify({ id, method, params, ...(sessionId ? { sessionId } : {}) })); } catch (e) { pending.delete(id); reject(e); }
+    });
+    ws.addEventListener('message', e => {
+      const m = JSON.parse(e.data);
+      if (m.id && pending.has(m.id)) { const p = pending.get(m.id); pending.delete(m.id); if (m.error) p.reject(new Error(m.error.message)); else p.resolve(m.result); return; }
+      // 화면이 띄우는 확인 창(alert · confirm)은 받아들이고 넘어간다
+      if (m.method === 'Page.javascriptDialogOpening') send('Page.handleJavaScriptDialog', { accept: true }, m.sessionId).catch(() => {});
+    });
+    ws.addEventListener('close', () => { for (const p of pending.values()) p.reject(new Error('브라우저와의 연결이 끊겼습니다')); pending.clear(); });
+    const ver = await send('Browser.getVersion');
+    const { targetId } = await send('Target.createTarget', { url: 'about:blank' });
+    const { sessionId } = await send('Target.attachToTarget', { targetId, flatten: true });
+    const S = (method, params) => send(method, params, sessionId);
+    await S('Page.enable'); await S('Runtime.enable');
+    // "화면 없이 띄운 브라우저"라는 표시를 뗀다 (그 표시만 보고 막는 사이트가 있다)
+    await S('Emulation.setUserAgentOverride', { userAgent: String(ver.userAgent || '').replace(/Headless/g, '') });
+    const close = async () => { // 로그인 상태가 프로필에 저장되도록 먼저 정상 종료를 시키고, 안 닫히면 끝낸다
+      try { await Promise.race([send('Browser.close'), sleep(3000)]); } catch {}
+      for (let i = 0; i < 20 && !exited; i++) await sleep(250);
+      kill();
+      for (let i = 0; i < 40 && !exited; i++) await sleep(250); // 완전히 끝난 뒤에 돌아간다 (바로 다음 올리기가 같은 프로필을 쓸 수 있게)
+    };
+    return { tab: makeTab(S), close, kill };
+  } catch (e) { kill(); for (let i = 0; i < 20 && !exited; i++) await sleep(250); throw e; }
+}
+
+/* ---------- 긱어스에 글 올리기 ---------- */
+// 할 수 있는 일을 한 가지로 고정한다: AG 마스터마인드의 "컨텐츠저널링" 카테고리에 글 하나를 게시하고 그 글 주소를 돌려준다
+const GEEKUS = { write: 'https://geekus.kr/ag-mastermind/post/write', home: 'https://geekus.kr/ag-mastermind', login: 'https://geekus.kr/login', category: '컨텐츠저널링' };
+const GEEKUS_POST_RE = /^https:\/\/geekus\.kr\/ag-mastermind\/post\/\d+$/;
+const POST_TIMEOUT = 150 * 1000;
+class PostError extends Error { constructor(code, message, extra) { super(message); this.code = code; this.extra = extra || {}; } }
+let geekusBusy = false; // 한 번에 하나만 (같은 프로필로 브라우저를 두 개 띄울 수 없다)
+
+// 순서: 글쓰기 화면 열기 → (로그인이 풀려 있으면 로그인) → 카테고리 · 제목 · 본문 넣기 → 제대로 들어갔는지 확인 → 게시 → 글 주소 얻기
+async function geekusPost(post, { onStep } = {}) {
+  if (geekusBusy) throw httpError(409, '긱어스에 올리는 작업이 이미 진행 중입니다. 끝난 뒤 다시 눌러 주세요.');
+  geekusBusy = true;
   const t0 = Date.now(), steps = []; // 지나온 단계와 걸린 시간 (오류가 나면 어디까지 갔는지 보여 준다)
   const secs = ms => (ms / 1000).toFixed(1) + '초';
-  const feed = chunk => {
-    pending += chunk;
-    const parts = pending.split('\n'); pending = parts.pop();
-    for (const l of parts) {
-      const t = cleanLine(l);
-      if (!t.startsWith(STEP_MARK)) continue;
-      const m = t.slice(STEP_MARK.length).match(/^(\d+)\|(.*)$/); // "스크립트 시작 뒤 지난 시간(ms)|단계 이름"
-      steps.push({ at: m ? Number(m[1]) : Date.now() - t0, text: m ? m[2] : t.slice(STEP_MARK.length) });
-      if (onStep) onStep(`${steps.length}단계 · ${steps[steps.length - 1].text}`);
-    }
-  };
+  const say = text => { steps.push({ at: Date.now() - t0, text }); if (onStep) onStep(`${steps.length}단계 · ${text}`); };
+  const fail = (code, message, extra) => { throw new PostError(code, message, extra); };
   // 비밀번호 · 이메일은 오류 메시지와 로그 파일에 남기지 않는다
   const mask = s => [post.password, post.email].filter(x => x && x.length >= 3).reduce((a, x) => a.split(x).join('***'), String(s));
-  let run, runError = null;
-  try { run = await runAside(cli, ['repl', '--file', '-'], { input: GEEKUS_POST_SCRIPT.replace('__DATA__', () => json), onData: feed, timeout: REPL_TIMEOUT }); }
-  catch (e) { runError = e; run = { code: null, out: '', all: '' }; }
-  const { code, out, all } = run, total = Date.now() - t0;
-  const trail = steps.map((s, i) => `  ${i + 1}. ${s.text} (${secs(s.at)}에 시작)`).join('\n') || '  (첫 단계도 시작하지 못했습니다)';
-  // 실패하면 Aside가 내놓은 출력 전체를 data/logs 에 남기고, 화면에는 멈춘 단계 · 진행 기록 · 오류 원문을 보여 준다
-  const explain = async (message, detail) => {
-    const last = steps[steps.length - 1];
+  const clean = u => String(u).split(/[?#]/)[0].replace(/\/$/, '');
+  const postUrl = u => { const m = clean(u).match(GEEKUS_POST_RE); return m ? m[0] : ''; };
+  const oneLine = s => String(s || '').replace(/\s+/g, ' ').trim();
+  let browser = null, tab = null, timedOut = false;
+  const timer = setTimeout(() => { timedOut = true; if (browser) browser.kill(); }, POST_TIMEOUT);
+
+  const run = async () => {
+    say('브라우저 준비하는 중');
+    browser = await launchBrowser(); tab = browser.tab;
+    if (timedOut) browser.kill();
+    const formReady = () => tab.evaluate(() => { const el = document.querySelector('main .ProseMirror'); return !!(el && el.editor && document.querySelector('main [role="combobox"]') && document.querySelector('main textarea.editor-title-input')); }).catch(() => false);
+    // 글쓰기 화면이 준비되는지, 로그인하라고 다른 화면으로 넘기는지 기다린다
+    const openWrite = async () => {
+      await tab.goto(GEEKUS.write);
+      for (let i = 0; i < 50; i++) {
+        if (clean(await tab.url()) !== GEEKUS.write) return 'moved';
+        if (await formReady()) return 'ready';
+        await sleep(300);
+      }
+      return 'timeout';
+    };
+
+    say('글쓰기 화면 여는 중');
+    let opened = await openWrite();
+    if (opened === 'moved') { // 로그인이 풀려 있으면 소개 화면으로 돌려보낸다
+      if (!post.email || !post.password) fail('login_required', '긱어스에 로그인되어 있지 않습니다. ⚙ 설정에 긱어스 이메일과 비밀번호를 넣은 뒤 다시 눌러 주세요.');
+      say('긱어스에 로그인하는 중');
+      await tab.goto(GEEKUS.login);
+      for (let i = 0; i < 60 && !(await tab.has('input[name="password"]')); i++) await sleep(300);
+      await tab.hydrated('input[name="password"]'); // 느린 PC에서는 화면이 준비되기 전에 넣은 글자가 지워진다
+      // 지난 계정을 기억해 비밀번호만 묻는 화면에서는 계정 칸이 type="hidden"으로 남아 있다. 숨은 칸은 입력할 수 없으므로 보이는 칸만 센다.
+      const ID = 'input[name="identifier"]:not([type="hidden"])', PW = 'input[name="password"]:not([type="hidden"])';
+      const remembered = await tab.evaluate(() => { const el = document.querySelector('input[name="identifier"][type="hidden"]'); return el ? el.value : ''; });
+      const sameAccount = !(await tab.has(ID)) && remembered.trim().toLowerCase() === String(post.email).trim().toLowerCase(); // 기억된 계정이 설정의 계정과 같으면 비밀번호만 넣는다
+      if (!sameAccount && !(await tab.has(ID))) { // 다른 계정이 기억돼 있으면 계정 입력 화면으로 바꾼다
+        await tab.clickRole('button', '변경');
+        for (let i = 0; i < 20 && !(await tab.has(ID)); i++) await sleep(300);
+      }
+      if ((!sameAccount && !(await tab.has(ID))) || !(await tab.has(PW))) fail('login_failed', '긱어스 로그인 화면에서 입력 칸을 찾지 못했습니다. (로그인 화면이 바뀌었을 수 있습니다)');
+      say(sameAccount ? '기억된 계정으로 비밀번호 넣는 중' : '이메일 · 비밀번호 넣는 중');
+      // 넣은 값이 잠시 뒤에도 그대로인지 확인하고 나서 누른다 (지워졌으면 다시 넣는다)
+      const typed = async () => (sameAccount || await tab.value(ID) === post.email) && await tab.value(PW) === post.password;
+      for (let i = 0; i < 3; i++) {
+        if (!sameAccount) await tab.fill(ID, post.email);
+        await tab.fill(PW, post.password);
+        await sleep(500);
+        if (await typed()) break;
+      }
+      if (!(await typed())) fail('login_failed', '긱어스 로그인 화면에 이메일과 비밀번호를 넣지 못했습니다. 잠시 뒤에 다시 눌러 주세요.');
+      say('로그인 버튼 누르고 결과 기다리는 중');
+      await tab.click('button[type="submit"]');
+      for (let i = 0; i < 60 && clean(await tab.url()) === GEEKUS.login; i++) await sleep(500); // 로그인되면 다른 화면으로 넘어간다
+      if (clean(await tab.url()) === GEEKUS.login) {
+        // 긱어스가 화면에 띄운 안내(비밀번호가 틀렸다 등)가 있으면 함께 알려 준다
+        const page = await tab.evaluate(() => (document.body.innerText || '').replace(/\s+/g, ' ').trim().slice(0, 300)).catch(() => '');
+        fail('login_failed', '긱어스 로그인에 실패했습니다. ⚙ 설정의 긱어스 이메일과 비밀번호를 확인하세요.', { page });
+      }
+      say('로그인 완료, 글쓰기 화면으로 돌아가는 중');
+      opened = await openWrite();
+      if (opened === 'moved') fail('login_failed', '긱어스 로그인에 실패했습니다. ⚙ 설정의 긱어스 이메일과 비밀번호를 확인하세요.');
+    }
+    if (opened !== 'ready') fail('not_ready', '글쓰기 화면이 15초 안에 준비되지 않았습니다. (편집기 · 카테고리 · 제목 칸 중 찾지 못한 것이 있습니다)');
+
+    say('카테고리 고르는 중');
+    let cats = [];
+    for (let i = 0; i < 3 && !cats.length; i++) { // 카테고리 목록 열기: 열리지 않았으면 다시 누른다
+      const open = await tab.evaluate(() => { const c = document.querySelector('main [role="combobox"]'); return !!c && c.getAttribute('aria-expanded') === 'true'; });
+      if (!open) await tab.click('main [role="combobox"]');
+      for (let j = 0; j < 10 && !cats.length; j++) {
+        await sleep(200);
+        cats = await tab.evaluate(() => [...document.querySelectorAll('[role="option"]')].map(o => (o.innerText || '').trim()));
+      }
+    }
+    if (!cats.includes(GEEKUS.category)) {
+      await tab.press('Escape');
+      fail('no_category', `"${GEEKUS.category}" 카테고리를 찾지 못했습니다. (있는 카테고리: ${cats.join(', ')})`);
+    }
+    await tab.clickRole('option', GEEKUS.category, 'body');
+    say('제목 넣는 중');
+    await tab.fill('main textarea.editor-title-input', post.title);
+    say('본문 편집기 비우는 중');
+    const hasEditor = await tab.evaluate(() => {
+      const el = document.querySelector('main .ProseMirror'), ed = el && el.editor;
+      if (ed) ed.chain().focus().clearContent(true).run();
+      return !!ed;
+    });
+    if (!hasEditor) fail('editor', '본문 편집기를 찾지 못해 게시하지 않았습니다.');
+    // 본문 맨 위: 편집기의 "영상" 버튼으로 유튜브 영상을 임베드한다 (동영상 추가 창에 링크를 넣고 "추가")
+    let embedded = false;
+    if (post.video) {
+      say('유튜브 영상 임베드하는 중');
+      const LINK = 'input[placeholder="YouTube, Loom, Vimeo 링크"]';
+      await tab.click('main form button[aria-label="영상"]');
+      for (let i = 0; i < 25 && !(await tab.has(LINK)); i++) await sleep(200);
+      if (await tab.has(LINK)) {
+        await tab.fill(LINK, post.video);
+        await tab.clickRole('button', '추가');
+        for (let i = 0; i < 30 && !embedded; i++) {
+          await sleep(200);
+          embedded = await tab.evaluate(() => (document.querySelector('main .ProseMirror').editor.getJSON().content || []).some(n => n.type === 'videoAttachment'));
+        }
+      }
+      if (!embedded) { // 영상 없이 올리지 않는다: 열려 있는 창을 닫고 멈춘다
+        await tab.press('Escape');
+        fail('embed_failed', '유튜브 영상을 글에 임베드하지 못해 게시하지 않았습니다. (긱어스 편집기의 영상 추가 창이 바뀌었을 수 있습니다)');
+      }
+    }
+    // 그 아래에 분석 내용을 이어 붙인다
+    say('본문 넣는 중');
+    const body = await tab.evaluate(h => {
+      const ed = document.querySelector('main .ProseMirror').editor;
+      ed.chain().focus('end').insertContent(h).run();
+      return { ok: ed.getText().trim().length > 0, chars: ed.getText().length, blocks: (ed.getJSON().content || []).map(n => n.type) };
+    }, post.html);
+    if (!body.ok) fail('editor', '본문 편집기에 내용을 넣지 못해 게시하지 않았습니다.');
+    // 넣은 것이 실제로 들어갔는지 확인한 뒤에만 게시한다
+    say('넣은 내용 확인 중');
+    const state = await tab.evaluate(() => {
+      const btn = [...document.querySelectorAll('main form button')].find(b => (b.innerText || '').trim() === '게시');
+      return {
+        category: (document.querySelector('main [role="combobox"]').innerText || '').trim(),
+        title: document.querySelector('main textarea.editor-title-input').value,
+        canPost: !!btn && !btn.disabled,
+      };
+    });
+    if (state.category !== GEEKUS.category || state.title !== post.title || !state.canPost) {
+      const why = [];
+      if (state.category !== GEEKUS.category) why.push(`카테고리가 "${state.category}"로 되어 있음`);
+      if (state.title !== post.title) why.push(`제목이 다르게 들어감 ("${String(state.title).slice(0, 40)}")`);
+      if (!state.canPost) why.push('게시 버튼이 없거나 눌리지 않는 상태');
+      fail('not_ready', '글쓰기 화면에 내용이 제대로 들어가지 않아 게시하지 않았습니다: ' + why.join(', '), { state });
+    }
+    // 시험용: 게시 직전에 멈춘다. 게시 버튼을 누를 자리를 찾을 수 있는지까지만 확인한다.
+    if (post.dryRun) return { dryRun: true, state, chars: body.chars, embedded, blocks: body.blocks, postButtonFound: !!(await tab.findRole('button', '게시', 'main form')) };
+
+    say('게시하는 중');
+    await tab.clickRole('button', '게시', 'main form'); // 게시 버튼은 여기서 한 번만 누른다
+    let url = '', confirmed = false;
+    for (let i = 0; i < 60 && !url; i++) {
+      await sleep(500);
+      const now = await tab.url();
+      url = postUrl(now);
+      if (url || (now && clean(now) !== GEEKUS.write)) break; // 글 화면 또는 글 목록으로 넘어갔다
+      if (!confirmed && i >= 3) { // 확인 창이 뜨는 경우 한 번만 눌러 준다
+        confirmed = await tab.evaluate(() => {
+          const d = document.querySelector('[role="alertdialog"],[role="dialog"]');
+          const b = d && [...d.querySelectorAll('button')].find(x => ['게시', '게시하기', '확인', '등록'].includes((x.innerText || '').trim()));
+          if (b) b.click();
+          return !!b;
+        }).catch(() => false);
+      }
+    }
+    if (!url) { // 글 화면으로 바로 넘어가지 않은 경우: 글 목록에서 방금 올린 제목의 글을 눌러 주소를 얻는다
+      say('올린 글 주소 확인 중');
+      if (clean(await tab.url()) !== GEEKUS.home) await tab.goto(GEEKUS.home);
+      for (let i = 0; i < 10 && !url; i++) {
+        await sleep(700);
+        const hit = await tab.evaluate(t => {
+          const h = [...document.querySelectorAll('main h3')].find(x => (x.innerText || '').replace(/\s+/g, ' ').trim() === t);
+          if (!h) return '';
+          const a = h.querySelector('a') || h.closest('a');
+          if (a && a.getAttribute('href')) return a.href;
+          h.click();
+          return 'clicked';
+        }, oneLine(post.title)).catch(() => '');
+        if (hit === 'clicked') { for (let j = 0; j < 12 && !url; j++) { await sleep(500); url = postUrl(await tab.url()); } }
+        else if (hit) url = postUrl(hit);
+      }
+    }
+    if (url) return { url };
+    fail('url_not_found', '게시 버튼을 눌렀지만 글 목록에서 올린 글을 찾지 못했습니다. 긱어스에서 글이 올라갔는지 먼저 확인해 주세요. (다시 올리면 글이 두 개가 될 수 있습니다)');
+  };
+
+  try {
+    return await run();
+  } catch (e) {
+    // 실패하면 어디서 멈췄는지를 data/logs 에 남기고, 화면에는 멈춘 단계 · 진행 기록 · 오류 원문을 보여 준다
+    const known = e instanceof PostError, total = Date.now() - t0, last = steps[steps.length - 1];
+    // 로그인 정보만 넣으면 풀리는 문제는 무엇을 해야 하는지만 짧게 알린다 (진행 기록은 붙이지 않는다)
+    if (known && e.code === 'login_required') throw Object.assign(new Error(mask(e.message)), { code: e.code });
+    const at = tab && !timedOut ? await tab.url() : '';
+    const message = timedOut ? `긱어스에 올리는 일이 ${POST_TIMEOUT / 1000}초 안에 끝나지 않아 멈췄습니다. 긱어스에서 글이 올라갔는지 먼저 확인해 주세요.`
+      : known ? e.message : e.status ? e.message : '긱어스 글쓰기 중 오류: ' + (e.message || String(e));
+    const trail = steps.map((s, i) => `  ${i + 1}. ${s.text} (${secs(s.at)}에 시작)`).join('\n') || '  (첫 단계도 시작하지 못했습니다)';
+    const detail = [at ? `화면 주소: ${at}` : '', known && e.extra.state ? `화면 상태: ${JSON.stringify(e.extra.state)}` : '', known && e.extra.page ? `화면에 나온 글: ${e.extra.page}` : '',
+      !known && !timedOut && e.stack ? `호출 위치:\n${String(e.stack).split('\n').slice(0, 8).join('\n')}` : ''].filter(Boolean).join('\n');
     let logNote = '';
     try {
       const dir = path.join(DATA, 'logs'), d = new Date(), p2 = n => String(n).padStart(2, '0');
       const file = path.join(dir, `geekus-${d.getFullYear()}${p2(d.getMonth() + 1)}${p2(d.getDate())}-${p2(d.getHours())}${p2(d.getMinutes())}${p2(d.getSeconds())}.log`);
       await fsp.mkdir(dir, { recursive: true });
-      await fsp.writeFile(file, mask([`시각: ${d.toLocaleString('ko-KR')}`, `글 제목: ${post.title}`, `오류: ${message}`, `aside 종료 코드: ${code}`, `걸린 시간: ${secs(total)}`, '', '[진행 기록]', trail, '', '[상세]', detail || '(없음)', '', '[Aside 출력 전체]', cleanOutput(all).replace(new RegExp(STEP_MARK, 'g'), '▶ ')].join('\n')), 'utf8');
+      await fsp.writeFile(file, mask([`시각: ${d.toLocaleString('ko-KR')}`, `글 제목: ${post.title}`, `오류: ${message}`, `걸린 시간: ${secs(total)}`, '', '[진행 기록]', trail, '', '[상세]', detail || '(없음)'].join('\n')), 'utf8');
       logNote = `\n■ 전체 로그 파일: ${file}`;
     } catch { /* 로그를 남기지 못해도 오류 안내는 그대로 한다 */ }
+    // 로그인 실패는 화면에는 짧게만 알리고, 자세한 내용은 로그 파일에만 남긴다
+    if (known && e.code === 'login_failed') throw Object.assign(new Error(mask(e.message)), { code: e.code });
     const text = mask([message, `■ 멈춘 단계: ${last ? `${steps.length}. ${last.text}` : '시작 전'} (전체 ${secs(total)} 걸림)`, `■ 진행 기록:\n${trail}`, detail ? `■ 상세:\n${detail}` : ''].filter(Boolean).join('\n')) + logNote;
     console.error(`[긱어스 올리기 실패]\n${text}\n`);
-    return text;
-  };
-  if (runError) throw Object.assign(new Error(await explain('긱어스 글쓰기 중 오류: ' + (runError.message || String(runError)), '')), { status: runError.status });
-  const marked = extractMarked(cleanOutput(out));
-  if (marked == null) { // 스크립트가 결과를 내놓기 전에 Aside 쪽에서 끝난 경우: 오류 줄부터 끝까지(호출 위치 포함)를 그대로 보여 준다
-    const lines = cleanOutput(all).split('\n').map(l => l.trim()).filter(l => l && !l.startsWith(STEP_MARK));
-    const i = lines.findIndex(l => /^(Uncaught\s+)?\w*(Error|Exception)\b/.test(l));
-    const errLine = i >= 0 ? lines[i].replace(/^(Uncaught\s+)?\w*Error:\s*/, '') : '';
-    const detail = (i >= 0 ? lines.slice(i, i + 10) : lines.slice(-10)).join('\n').slice(0, 1500);
-    throw new Error(await explain('긱어스 글쓰기 중 오류: ' + (errLine || `Aside가 오류 내용을 알려 주지 않고 끝났습니다 (종료 코드 ${code})`).slice(0, 300), `Aside 출력 (${i >= 0 ? '오류 줄부터' : '마지막 10줄'}):\n${detail}`));
+    throw Object.assign(new Error(text), { code: known ? e.code : timedOut ? 'timeout' : 'script_error', status: e.status });
+  } finally {
+    clearTimeout(timer);
+    if (browser) await browser.close().catch(() => {});
+    geekusBusy = false;
   }
-  let r;
-  try { r = JSON.parse(marked); } catch { throw new Error(await explain('Aside가 돌려준 결과를 읽지 못했습니다', marked.slice(0, 500))); }
-  if (!r.ok) {
-    const detail = [r.at ? `화면 주소: ${r.at}` : '', r.name ? `오류 종류: ${r.name}` : '', r.stack ? `호출 위치:\n${r.stack}` : '', r.state ? `화면 상태: ${JSON.stringify(r.state)}` : ''].filter(Boolean).join('\n');
-    throw Object.assign(new Error(await explain((r.code === 'script_error' ? '긱어스 글쓰기 중 오류: ' : '') + (r.error || '긱어스에 올리지 못했습니다'), detail)), { code: r.code });
-  }
-  if (r.dryRun) return { dryRun: true, state: r.state, chars: r.chars, embedded: r.embedded, blocks: r.blocks };
-  if (!GEEKUS_POST_RE.test(r.url)) throw new Error('게시 후 받은 글 주소가 올바르지 않습니다');
-  return { url: r.url };
 }
 
 /* ---------- 파일 저장 ---------- */
@@ -770,9 +869,11 @@ async function handle(req, res) {
 
   if (p === '/api/health' && req.method === 'GET') {
     // preparing: 처음 실행 준비(도구 받기)가 아직 끝나지 않았으면 지금 하고 있는 일
-    if (preparing) return send(res, 200, { ok: true, app: APP, version: VERSION, preparing, ytdlp: false, ffmpeg: false, aside: false, dataDir: DATA });
+    // geekus: 긱어스에 올릴 때 쓸 브라우저(엣지 · 크롬)가 이 PC에 있는지
+    const geekus = !!(await findBrowser());
+    if (preparing) return send(res, 200, { ok: true, app: APP, version: VERSION, preparing, ytdlp: false, ffmpeg: false, geekus, dataDir: DATA });
     const t = await getTools();
-    return send(res, 200, { ok: true, app: APP, version: VERSION, preparing: '', ytdlp: !!t.ytdlp, ytdlpVersion: t.version, ffmpeg: !!t.ffmpeg, aside: !!(await findAside()), dataDir: DATA });
+    return send(res, 200, { ok: true, app: APP, version: VERSION, preparing: '', ytdlp: !!t.ytdlp, ytdlpVersion: t.version, ffmpeg: !!t.ffmpeg, geekus, dataDir: DATA });
   }
   if (p === '/api/youtube' && req.method === 'GET') {
     const url = youtubeUrl(u.searchParams.get('url') || '');
@@ -809,13 +910,12 @@ async function handle(req, res) {
     // 글 맨 위에 임베드할 유튜브 영상 (없으면 임베드 없이 올린다). 유튜브 주소만 받는다.
     const video = body.video ? youtubeUrl(body.video) : '';
     if (body.video && !video) return send(res, 400, { error: '임베드할 영상 주소가 유튜브 링크가 아닙니다' });
-    const cli = await findAside();
-    if (!cli) return send(res, 501, { error: 'Aside CLI가 설치되어 있지 않습니다 (Aside 설정 → Developers → Install)' });
+    if (!(await findBrowser())) return send(res, 501, { error: '엣지나 크롬 브라우저를 찾지 못해 긱어스에 올릴 수 없습니다' });
     res.writeHead(200, { 'content-type': 'application/x-ndjson; charset=utf-8', 'cache-control': 'no-store' });
     const emit = o => { if (!res.writableEnded) res.write(JSON.stringify(o) + '\n'); };
     // 게시 버튼을 누른 뒤에 끊기면 글 주소를 놓치므로, 화면이 닫혀도 중간에 멈추지 않고 끝까지 간다
     try {
-      const r = await geekusPost(cli, { title, html, video, email: String(body.email || ''), password: String(body.password || ''), dryRun: body.dryRun === true },
+      const r = await geekusPost({ title, html, video, email: String(body.email || ''), password: String(body.password || ''), dryRun: body.dryRun === true },
         { onStep: text => emit({ type: 'log', text }) });
       emit({ type: 'done', ...r });
     } catch (e) { emit({ type: 'error', error: e.message || String(e), code: e.code }); }
@@ -865,7 +965,7 @@ async function start({ open = false } = {}) {
   const t = await getTools();
   if (!t.ytdlp) console.log('  ⚠ 유튜브 도구(yt-dlp)가 없어 영상을 분석할 수 없습니다.');
   else if (!t.ffmpeg) console.log('  화면 캡처 도구(ffmpeg)가 없어 도입부 화면 캡처는 건너뜁니다.');
-  if (await findAside()) console.log('  Aside CLI 사용 (긱어스에 올리기)');
+  if (!(await findBrowser())) console.log('  ⚠ 엣지나 크롬 브라우저를 찾지 못해 긱어스에 올리기는 쓸 수 없습니다.');
   console.log(`\n  준비됐습니다  →  ${origin}\n  브라우저에 화면이 열립니다. 열리지 않으면 위 주소를 브라우저 주소창에 넣어 주세요.\n\n  끄려면 이 창을 닫으세요.\n`);
   if (open) openBrowser(origin);
   // yt-dlp 버전 확인은 몇 초 걸리므로 뒤에서 미리 해 둔다 (첫 영상 분석이 그만큼 빨라진다)
@@ -881,4 +981,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { server, start, deps, youtubeUrl, pickCaption, parseCaption, formatCues, extractFrames, getVideo, extractMarked, cleanOutput, download, prepareTools, DOWNLOADS };
+module.exports = { server, start, deps, youtubeUrl, pickCaption, parseCaption, formatCues, extractFrames, getVideo, download, prepareTools, DOWNLOADS, findBrowser, launchBrowser, geekusPost };

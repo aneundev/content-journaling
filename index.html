@@ -152,7 +152,7 @@ dialog .hint{margin:4px 0}
         <span class="spacer"></span>
         <button class="btn ghost" id="toggleEdit">✏️ 수정</button>
       </div>
-      <!-- 긱어스에 올리기: Aside CLI가 설치된 PC에서만 보인다 -->
+      <!-- 긱어스에 올리기: 올릴 때 쓸 브라우저(엣지 · 크롬)를 찾지 못한 PC에서만 숨긴다 -->
       <div id="postBox" hidden>
         <div class="row">
           <button class="btn" id="postGeekus" title="긱어스 AG 마스터마인드의 컨텐츠저널링 카테고리에 게시합니다. 글 맨 위에 유튜브 영상을 임베드합니다">🚀 긱어스에 올리기</button>
@@ -183,8 +183,7 @@ dialog .hint{margin:4px 0}
       <option value="claude-sonnet-5-5">Claude Sonnet 5.5 — 균형</option>
       <option value="claude-haiku-5-5">Claude Haiku 5.5 — 가장 빠르고 저렴</option>
     </select>
-    <!-- 긱어스에 올리기 설정: Aside CLI가 설치된 PC에서만 보인다 -->
-    <div id="geekusBox" hidden>
+    <div id="geekusBox">
       <h3>긱어스에 올리기</h3>
       <div class="row">
         <div><label for="pCohort">기수</label><input type="text" id="pCohort" inputmode="numeric" placeholder="예: 51" autocomplete="off"></div>
@@ -195,7 +194,7 @@ dialog .hint{margin:4px 0}
       <input type="text" id="gEmail" placeholder="긱어스 로그인 이메일" autocomplete="off" spellcheck="false">
       <label for="gPw">긱어스 비밀번호</label>
       <input type="password" id="gPw" autocomplete="off">
-      <p class="hint">긱어스에 올릴 때 Aside 브라우저의 로그인이 풀려 있으면 이 계정으로 로그인합니다. 이 PC의 data/settings.json 파일에 저장됩니다.</p>
+      <p class="hint">긱어스에 올릴 때 이 계정으로 로그인합니다. 한 번 로그인하면 다음부터는 로그인 없이 올라갑니다. 이 PC의 data 폴더에만 저장됩니다.</p>
     </div>
     <div class="dfoot">
       <button class="btn ghost" type="button" id="sCancel">닫기</button>
@@ -512,7 +511,7 @@ function showItem(it,keepInput){ // keepInput: 링크 입력 칸은 건드리지
 }
 function pstatus(text,err){const s=$('#postStatus');s.textContent=text;s.classList.toggle('err',!!err)}
 function renderPost(){ // 올릴 제목 미리 보여 주기, 올린 뒤에는 글 링크
-  $('#postBox').hidden=!server?.aside; // Aside가 없는 PC에서는 긱어스에 올리기를 보이지 않는다
+  $('#postBox').hidden=!server?.geekus; // 올릴 때 쓸 브라우저(엣지 · 크롬)가 없는 PC에서만 숨긴다
   const info=$('#postInfo'), ready=!!cur?.out?.trim();
   $('#postGeekus').disabled=!ready||posting;
   info.replaceChildren();
@@ -588,7 +587,6 @@ async function openSettings(){
   try{await loadSettings()}catch{} // 다른 창에서 바꿨을 수 있으니 열 때 다시 읽는다
   const g=settings.geekus||{}, p=getProfile();
   $('#sKey').value=settings.apiKey||'';$('#sModel').value=settings.model;
-  $('#geekusBox').hidden=!server.aside; // 긱어스 관련 칸은 Aside가 있는 PC에서만 보인다
   $('#pCohort').value=p.cohort||'';$('#pName').value=p.name||'';
   $('#gEmail').value=g.email||'';$('#gPw').value=g.password||'';
   $('#settingsDlg').showModal();
@@ -596,17 +594,15 @@ async function openSettings(){
 $('#openSettings').addEventListener('click',openSettings);
 $('#sCancel').addEventListener('click',()=>$('#settingsDlg').close());
 $('#settingsForm').addEventListener('submit',async()=>{
-  settings={...settings,apiKey:$('#sKey').value.trim(),model:$('#sModel').value};
-  if(!$('#geekusBox').hidden){ // 보이지 않는 칸의 값으로 저장돼 있던 것을 지우지 않는다
-    settings.profile={cohort:$('#pCohort').value.trim().replace(/기$/,''),name:$('#pName').value.trim()};
-    settings.geekus={email:$('#gEmail').value.trim(),password:$('#gPw').value};
-  }
+  settings={...settings,apiKey:$('#sKey').value.trim(),model:$('#sModel').value,
+    profile:{cohort:$('#pCohort').value.trim().replace(/기$/,''),name:$('#pName').value.trim()},
+    geekus:{email:$('#gEmail').value.trim(),password:$('#gPw').value}};
   client=null;
   try{await api.post('/api/settings',settings);toast('설정을 저장했습니다');renderPost();if(settings.apiKey&&$('#status').classList.contains('err'))status('')}
   catch{toast('⚠ 설정을 저장하지 못했습니다 — 검은 창(START)이 켜져 있는지 확인')}
 });
 
-/* ----- 긱어스에 올리기: 서버가 Aside CLI로 내 브라우저에서 글을 쓰고 게시한다 ----- */
+/* ----- 긱어스에 올리기: 서버가 PC의 엣지(또는 크롬)를 화면 없이 띄워 글을 쓰고 게시한다 ----- */
 // 서버가 한 줄에 JSON 하나씩 보낸다: 진행 상황(log)을 흘려보내다가 마지막에 결과(done) 또는 오류(error)
 async function postStream(path,body,onLog){
   const r=await call(path,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});
@@ -639,7 +635,7 @@ async function postToGeekus(){
   const it=cur;
   if(!it?.out?.trim()){pstatus('올릴 분석 결과가 없습니다',true);return}
   if(!server){pstatus('검은 창(START)이 켜져 있어야 올릴 수 있습니다',true);return}
-  if(!server.aside){pstatus('Aside CLI가 설치되어 있지 않습니다 (Aside 설정 → Developers → Install)',true);return}
+  if(!server.geekus){pstatus('엣지나 크롬 브라우저를 찾지 못해 긱어스에 올릴 수 없습니다',true);return}
   const title=postTitle(getProfile(),it);
   if(!title){pstatus('기수와 이름이 없어 글 제목을 만들 수 없습니다. ⚙ 설정에서 먼저 입력하세요.',true);openSettings();return}
   if(it.postUrl&&!confirm('이 분석은 이미 긱어스에 올렸습니다.\n다시 올리면 글이 하나 더 생깁니다. 그래도 올릴까요?'))return;
@@ -650,6 +646,7 @@ async function postToGeekus(){
     pstatus('긱어스에 올리는 중…');
     const g=settings.geekus||{};
     // video: 글 맨 위에 임베드할 유튜브 영상 (서버가 편집기의 "영상" 버튼으로 넣는다)
+    if(!g.email||!g.password)pstatus('긱어스에 올리는 중… (처음이면 ⚙ 설정의 긱어스 이메일 · 비밀번호가 필요합니다)');
     const r=await postStream('/api/geekus/post',{title,html:geekusHtml(it),video:it.url,email:g.email||'',password:g.password||''},t=>pstatus(t+'…'));
     it.postUrl=r.url;it.postedAt=Date.now();save();
     pstatus('게시 완료 ✓');

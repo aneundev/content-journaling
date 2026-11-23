@@ -12,10 +12,10 @@ rem ---------------------------------------------------------------
 
 set "NODE="
 
-rem 1) PC에 설치된 Node.js: 20 이상이면 그대로 쓴다
+rem 1) PC에 설치된 Node.js: 22 이상이면 그대로 쓴다
 where node >nul 2>nul
 if errorlevel 1 goto check_local
-node -e "process.exit(+process.versions.node.split('.')[0]>=20?0:1)" >nul 2>nul
+node -e "process.exit(+process.versions.node.split('.')[0]>=22?0:1)" >nul 2>nul
 if errorlevel 1 goto check_local
 set "NODE=node"
 goto run
